@@ -1,0 +1,32 @@
+Name: pipes-safe
+Version: 1.0.0
+Cabal-Version: >=1.14.0
+Build-Type: Simple
+License: BSD3
+License-File: LICENSE
+Copyright: 2012 Gabriel Gonzalez
+Author: Gabriel Gonzalez
+Maintainer: Gabriel439@gmail.com
+Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
+Synopsis: Compositional pipelines
+Description:
+    This package adds resource management primitives to @pipes@, including:
+    .
+    * Lazy initialization / prompt finalization
+    .
+    * Asynchronous exception safety
+    .
+    * @try@ and @bracket@ functionality
+Category: Control, Pipes, Proxies
+Tested-With: GHC ==7.4.1
+Source-Repository head
+    Type: git
+    Location: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library
+
+Library
+    Build-Depends:
+        base >= 4 && < 5,
+        transformers >= 0.2.0.0,
+        pipes >= 3.0.0
+    Exposed-Modules: Control.Proxy.Safe
+    Default-Language: Haskell98
