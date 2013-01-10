@@ -10,13 +10,16 @@ Maintainer: Gabriel439@gmail.com
 Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
 Synopsis: Compositional pipelines
 Description:
-    This package adds resource management primitives to @pipes@, including:
+    This package adds resource management to the @pipes@ ecosystem, including:
     .
-    * Lazy initialization / prompt finalization
+    * @bracket@ functionality to lazily manage resources
     .
     * Asynchronous exception safety
     .
-    * @try@ and @bracket@ functionality
+    * Automatic promotion of unmanaged pipes to managed pipes
+    .
+    You can use these primitives to implement lazy resource management for
+    @pipes@.
 Category: Control, Pipes, Proxies
 Tested-With: GHC ==7.4.1
 Source-Repository head
