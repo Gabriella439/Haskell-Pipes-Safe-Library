@@ -14,18 +14,19 @@ module Control.Proxy.Safe (
 
     -- * Checked Exceptions
     CheckP(..),
-    tryK,
     tryIO,
-    tryIOK,
 
-    -- * Checked Exception handling
+    -- * Exception handling
     throw,
     catch,
     handle,
 
     -- * Finalization
-    onException,
+    onAbort,
+    finally,
     bracket,
+    bracket_,
+    bracketOnAbort,
 
     -- * Prompt Finalization
     -- $prompt
@@ -57,6 +58,9 @@ data Status = Status {
 
 {-| 'SafeIO' extends the 'IO' monad with the ability to selectively unmask
     computations and store registered finalizers
+
+    'SafeIO' purposefully does not implement 'MonadIO'.  Use 'tryIO' to safely
+    introduce 'IO' actions.
 -}
 newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Status IO r }
 
@@ -169,28 +173,21 @@ type ExceptionP = EitherP Ex.SomeException
 
     'try' is a monad morphism:
 
-> try $ do x <- m
->          f x
-> = do x <- try m
->      try (f x)
+> do x <- try m
+>    try (f x)
+> = try $ do x <- m
+>            f x
 >
 > try (return x) = return x
+
+    ... or equivalently:
+
+> (try .) f >=> (try .) g = (try .) (f >=> g)
+>
+> (try .) return = return
 -}
 class CheckP p where
     try :: p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r
-
-{-| Check all exceptions for a 'P.Proxy' \'@K@\'leisli arrow
-
-    @tryK = (try .)@, which defines a functor between Kleisli categories
-
-> tryK (f >=> g) = tryK f >=> tryK g
->
-> tryK return = return
--}
-tryK
- :: (CheckP p) => (q -> p a' a b' b IO r)
- -> (q -> ExceptionP p a' a b' b SafeIO r)
-tryK = (try .)
 
 instance CheckP PF.ProxyFast where
     try p0 = EitherP (go p0) where
@@ -219,25 +216,16 @@ instance CheckP PC.ProxyCorrect where
 
 {-| Check all exceptions for an 'IO' action
 
-> try $ do x <- m
->          f x
-> = do x <- try m
->      try (f x)
+> do x <- try m
+>    try (f x)
+> = try $ do x <- m
+>            f x
 >
 > try (return x) = return x
 -}
 tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
     Ex.try $ restore s io
-
-{-| Check all exceptions for an 'IO' \'@K@\'leisli arrow
-
-> tryIOK (f >=> g) = tryIOK f >=> tryIOK g
->
-> tryIOK return = return
--}
-tryIOK :: (P.Proxy p) => (q -> IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
-tryIOK = (tryIO .)
 
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> ExceptionP p a' a b' b m r
@@ -262,34 +250,72 @@ handle
  -> ExceptionP p a' a b' b m r
 handle = flip catch
 
-{-| Analogous to 'Ex.onException' from @Control.Exception@, except this also
-    protects against premature termination.
+{-| Similar to 'Ex.onException' from @Control.Exception@, except this also
+    protects against:
 
-    The first argument lifts 'onException' to work with any base monad.  Use
+    * premature termination, and
+
+    * exceptions in other proxy stages.
+
+    The first argument lifts 'onAbort' to work with other base monads.  Use
     'id' if your base monad is already 'SafeIO'.
+
+> do x <- onAbort nat fin m
+>    onAbort nat fin (f x)
+> = onAbort nat fin $ do x <- m
+>                            f x
+>
+> onAbort (return x) = return x
+
+> onAbort nat fin1 . onAbort nat fin2 = onAbort nat (fin1 >> fin2)
+>
+> onAbort nat (return ()) = id
 -}
-onException
+onAbort
  :: (Monad m, P.Proxy p)
  => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
- -> IO r'                         -- ^ Action run on exception
+ -> IO r'                         -- ^ Action to run on abort
  -> ExceptionP p a' a b' b m r    -- ^ Guarded computation
  -> ExceptionP p a' a b' b m r
-onException nat after p =
+onAbort nat after p =
     register nat (after >> return ()) p
         `E.catch` (\e -> do
             P.hoist nat $ tryIO after
             E.throw e )
 
+{-| Analogous to 'Ex.finally' from @Control.Exception@
+
+    The first argument lifts 'finally' to work with other base monads.  Use 'id'
+    if your base monad is already 'SafeIO'.
+
+> finally nat after p = do
+>     r <- onAbort nat after p
+>     P.hoist nat $ tryIO after
+>     return r
+-}
+finally
+ :: (Monad m, P.Proxy p)
+ => (forall x . SafeIO x -> m x) -- ^ Monad morphism
+ -> IO r'                        -- ^ Guaranteed final action
+ -> ExceptionP p a' a b' b m r   -- ^ Guarded computation
+ -> ExceptionP p a' a b' b m r
+finally nat after p = do
+    r <- onAbort nat after p
+    P.hoist nat $ tryIO after
+    return r
+
 {-| Analogous to 'Ex.bracket' from @Control.Exception@
 
-    The first argument lifts 'bracket' to work with any base monad.  Use 'id' if
-    your base monad is already 'SafeIO'.
+    The first argument lifts 'bracket' to work with other base monads.  Use 'id'
+    if your base monad is already 'SafeIO'.
 
-    'bracket' guarantees that the acquired resource is finalized, even if:
+    'bracket' guarantees that if the resource acquisition completes, then the
+    resource will be released.
 
-    * Another 'P.Proxy' terminates before the computation completes
-
-    * An exception is thrown anywhere, even if uncaught
+> bracket nat before after p = do
+>     h <- P.hoist nat $ tryIO before
+>     let finalizer = after h
+>     finally nat finalizer (p h)
 -}
 bracket
  :: (Monad m, P.Proxy p)
@@ -301,42 +327,115 @@ bracket
 bracket nat before after p = do
     h <- P.hoist nat $ tryIO before
     let finalizer = after h
-    r <- register nat (finalizer >> return ()) (p h)
-        `E.catch` (\e -> do
-            P.hoist nat $ tryIO finalizer
-            E.throw e )
-    P.hoist nat $ tryIO finalizer
-    return r
+    finally nat finalizer (p h)
+
+{-| Analogous to 'Ex.bracket_' from @Control.Exception@
+
+    The first argument lifts 'bracket_' to work with any base monad.  Use 'id'
+    if your base monad is already 'SafeIO'.
+
+> bracket_ nat before after p = do
+>     P.hoist nat $ tryIO before
+>     finally nat after p
+-}
+bracket_
+ :: (Monad m, P.Proxy p)
+ => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
+ -> IO r1                         -- ^ Acquire resource
+ -> IO r2                         -- ^ Release resource
+ -> ExceptionP p a' a b' b m r    -- ^ Use resource
+ -> ExceptionP p a' a b' b m r
+bracket_ nat before after p = do
+    P.hoist nat $ tryIO before
+    finally nat after p
+
+{-| Analogous to 'Ex.bracketOnAbort' from @Control.Exception@
+
+    The first argument lifts 'bracketOnAbort' to work with any base monad.  Use
+    'id' if your base monad is already 'SafeIO'.
+
+> bracketOnAbort nat before after p = do
+>     h <- P.hoist nat $ tryIO before
+>     let finalizer = after h
+>     onAbort nat finalizer (p h)
+-}
+bracketOnAbort
+ :: (Monad m, P.Proxy p)
+ => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
+ -> IO h                               -- ^ Acquire resource
+ -> (h -> IO r')                       -- ^ Release resource
+ -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
+ -> ExceptionP p a' a b' b m r
+bracketOnAbort nat before after p = do
+    h <- P.hoist nat $ tryIO before
+    let finalizer = after h
+    onAbort nat finalizer (p h)
+
 
 {- $prompt
-    This implementation does not /promptly/ finalize a 'Proxy' when another
-    'P.Proxy' composed with it terminates first.  In those cases, finalization
-    only occurs when 'runSafeIO' completes.  For example, given the following
-    'P.Session':
+    This implementation will not /promptly/ finalize a 'P.Proxy' if another
+    composed 'P.Proxy' prematurely terminates.  However, the implementation will
+    still save the dropped finalizer and run it when the 'P.Session' completes
+    in order to guarantee deterministic finalization.
 
-> runSafeIO $ runProxy $ runEitherK $ (p1 >-> p2) >=> p3
+    To see why, consider the following 'P.Proxy' assembly:
 
-    ... when @(p1 >-> p2)@ terminates, 'runSafeIO' will not run any dropped
-    finalizers until @p3@ completes.
+> p1 >-> ((p2 >-> p3) >=> p4)
 
-    In practice, this is usually not a problem since most users will run
-    linear 'P.Session's that look like this:
+    Now ask yourself the question, \"If @p3@ prematurely terminates, should it
+    promptly finalize @p1@?\"
 
-> runSafeIO $ runProxy $ runEitherK $ p1 >-> p2 >-> ...
+    If you answered \"yes\", then you would have a bug if @p4@ were to
+    'request', which would restore control to @p1@ after we already finalized
+    it.
 
-    Here, the end of composition coincides with the end of 'runSafeIO', so the
-    implementation finalizes everything promptly.
+    If you answered \"no\", then consider the case where @p2 = idT@ and
+    @p4 = return@:
 
-    However, sometimes you know for certain that upstream or downstream
-    'P.Proxy's are unreachable and would like to finalize them immediately to
-    conserve resources.  The following functions let you promptly finalize all
-    resources in either direction, but they are unsafe because you most prove
-    that those resources are unreachable.
+> p1 >-> ((idT >-> p3) >=> return)
+> p1 >-> (idT >-> p3)               -- f   >=> return = f
+> p1 >-> p3                         -- idT >-> p      = p
+
+    Answering \"no\" means that @p3@ would be unable to promptly finalize a
+    'P.Proxy' immediately upstream of it.  More generally, the 'P.Proxy' laws
+    and the 'Monad' laws say that we cannot distinguish between proxies that are
+    \"directly\" or \"indirectly\" composed with a given 'P.Proxy'.
+
+    There is a solution that permits perfectly prompt finalization, but it
+    requires indexed monads to guarantee the necessary safety through the type
+    system.  In the absence of indexed monads, the next best solution is to let
+    you promptly finalize things yourself, but then /you/ must prove that this
+    finalization is safe and that all upstream pipes are unreachable.
+
+    The following two unsafe operations allow you to trade safety for prompt
+    finalization.  Use them if you desire prompter finalization guarantees and
+    if you can prove their usage is safe.  However, this proof is not trivial.
+
+    For example, you might suppose that the following usage of 'unsafeCloseU' is
+    safe because it never 'request's after closing upstream, nor does it
+    terminate:
+
+> falseSenseOfSecurity () = do
+>     x <- request ()
+>     unsafeCloseU
+>     forever $ respond x
+
+    However, this is not safe, as the following counter-example demonstrates:
+
+> p1 >-> ((falseSenseOfSecurity >-> request) >=> request)
+
+    @falseSenseOfSecurity@ will finalize the upstream @p1@, but then will
+    abort when the downstream 'request' terminates, and then the second
+    'request' will illegally access @p1@ after we already finalized it.
+
+    In other words, you cannot prove any prompt finalization is safe unless you
+    control the entire 'P.Session'.  Therefore, do not use the following unsafe
+    operations in 'P.Proxy' libraries.  Only the end user assembling the
+    final 'P.Session' may safely insert these calls.
 -}
 
 {-| 'unsafeCloseU' calls all finalizers registered upstream of the current
-    'P.Proxy'.  You can only safely call this function if the surrounding monad
-    never 'P.request's again and never terminates. -}
+    'P.Proxy'. -}
 unsafeCloseU :: (P.Proxy p) => ExceptionP p a' a b' b SafeIO ()
 unsafeCloseU = do
     (huRef, hu) <- lift $ SafeIO $ do
@@ -347,8 +446,7 @@ unsafeCloseU = do
     lift $ SafeIO $ lift $ writeIORef huRef (return ())
 
 {-| 'unsafeCloseD' calls all finalizers registered downstream of the current
-    'P.Proxy'.  You can only safely call this function if the surrounding monad
-    never 'P.respond's again and never terminates. -}
+    'P.Proxy'. -}
 unsafeCloseD :: (P.Proxy p) => ExceptionP p a' a b' b SafeIO ()
 unsafeCloseD = do
     (hdRef, hd) <- lift $ SafeIO $ do
