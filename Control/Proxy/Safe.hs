@@ -1,6 +1,6 @@
 -- | Resource acquisition integrated with proxies
 
-{-# LANGUAGE Rank2Types, CPP, KindSignatures #-}
+{-# LANGUAGE Rank2Types, CPP, KindSignatures, Safe #-}
 
 module Control.Proxy.Safe (
     -- * Safe IO
@@ -193,9 +193,7 @@ type ExceptionP = EitherP Ex.SomeException
     'CheckP'.
 
     'try' is a both a monad morphism and a proxy morphism, which means that
-    @tryK = (try .)@ defines a functor that preserves five categories:
-
-> tryK = (try .)
+    @tryK = (try .)@ defines a functor that preserves five categories.
 
     Functor between \'@K@\'leisli categories:
 
