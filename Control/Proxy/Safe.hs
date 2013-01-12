@@ -6,6 +6,7 @@ module Control.Proxy.Safe (
     -- * Safe IO
     SafeIO,
     runSafeIO,
+    runSaferIO,
 
     -- * ExceptionP
     -- $exceptionp
@@ -14,6 +15,7 @@ module Control.Proxy.Safe (
 
     -- * Checked Exceptions
     CheckP(..),
+    tryK,
     tryIO,
 
     -- * Exception handling
@@ -78,11 +80,29 @@ instance Monad SafeIO where
 {-| Convert back to the 'IO' monad, running all dropped finalizers at the very
     end
 
-    This masks asynchronous exceptions and only unmasks them during a 'try'.
+    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
+    during 'try' or 'tryIO'.
 -}
 runSafeIO :: SafeIO r -> IO r
 runSafeIO m =
     Ex.mask $ \restore -> do
+        huRef <- newIORef (return ())
+        hdRef <- newIORef (return ())
+        runReaderT (unSafeIO m) (Status restore huRef hdRef) `Ex.finally` (do
+            hu <- readIORef huRef
+            hu
+            hd <- readIORef hdRef
+            hd )
+
+{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
+    end
+
+    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
+    unmasks them during 'try' or 'tryIO'.
+-}
+runSaferIO :: SafeIO r -> IO r
+runSaferIO m =
+    Ex.uninterruptibleMask $ \restore -> do
         huRef <- newIORef (return ())
         hdRef <- newIORef (return ())
         runReaderT (unSafeIO m) (Status restore huRef hdRef) `Ex.finally` (do
@@ -169,22 +189,41 @@ register nat h p = registerK nat h (\_ -> p) undefined
 -- | A proxy transformer that stores exceptions using 'EitherP'
 type ExceptionP = EitherP Ex.SomeException
 
-{-| Proxies that support checked exceptions
+{-| You can retroactively check all exceptions for proxies that implement
+    'CheckP'.
 
-    'try' is a monad morphism:
+    'try' is a both a monad morphism and a proxy morphism, which means that
+    @tryK = (try .)@ defines a functor that preserves five categories:
 
-> do x <- try m
->    try (f x)
-> = try $ do x <- m
->            f x
+> tryK = (try .)
+
+    Functor between \'@K@\'leisli categories:
+
+> tryK f >=> tryK g = tryK (f >=> g)
 >
-> try (return x) = return x
+> tryK return = return
 
-    ... or equivalently:
+    Functor between 'P.Proxy' categories:
 
-> (try .) f >=> (try .) g = (try .) (f >=> g)
+> tryK f >-> tryK g = tryK (f >-> g)
 >
-> (try .) return = return
+> tryK idT = idT
+
+> tryK f >~> tryK g = tryK (f >~> g)
+> 
+> tryK coidT = coidT
+
+    Functor between \"request\" categories:
+
+> tryK f \>\ tryK g = tryK (f \>\ g)
+>
+> tryK request = request
+
+    Functor between \"respond\" categories:
+
+> tryK f />/ tryK g = tryK (f />/ g)
+>
+> tryK respond = respond
 -}
 class CheckP p where
     try :: p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r
@@ -214,14 +253,17 @@ instance CheckP PC.ProxyCorrect where
                         return (PC.Respond b  (\b' -> go (fb' b')))
                     PC.Pure r -> return (PC.Pure (Right r)) )))
 
+-- | Check all exceptions for a 'P.Proxy' \'@K@\'leisli arrow
+tryK
+ :: (CheckP p)
+ => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
+tryK = (try .)
+
 {-| Check all exceptions for an 'IO' action
 
-> do x <- try m
->    try (f x)
-> = try $ do x <- m
->            f x
+> (tryIO .) f >=> (tryIO .) g = (tryIO .) (f >=> g)
 >
-> try (return x) = return x
+> (tryIO .) return = return
 -}
 tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
@@ -267,7 +309,7 @@ handle = flip catch
 >
 > onAbort (return x) = return x
 
-> onAbort nat fin1 . onAbort nat fin2 = onAbort nat (fin1 >> fin2)
+> onAbort nat fin1 . onAbort nat fin2 = onAbort nat (fin2 >> fin1)
 >
 > onAbort nat (return ()) = id
 -}
