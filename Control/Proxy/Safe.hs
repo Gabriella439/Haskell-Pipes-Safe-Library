@@ -3,26 +3,26 @@
 {-# LANGUAGE Rank2Types, CPP, KindSignatures #-}
 
 module Control.Proxy.Safe (
+    -- * Exception Handling
+    -- $exceptionp
+    module Control.Proxy.Trans.Either,
+    ExceptionP,
+    throw,
+    catch,
+    handle,
+
     -- * Safe IO
     SafeIO,
     runSafeIO,
     runSaferIO,
-
-    -- * ExceptionP
-    -- $exceptionp
-    ExceptionP,
-    module Control.Proxy.Trans.Either,
+    trySafeIO,
+    trySaferIO,
 
     -- * Checked Exceptions
     -- $check
     CheckP(..),
     tryK,
     tryIO,
-
-    -- * Exception handling
-    throw,
-    catch,
-    handle,
 
     -- * Finalization
     onAbort,
@@ -54,6 +54,46 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Prelude hiding (catch)
 #endif
 
+{- $exceptionp
+    This library checks and stores all exceptions using the 'EitherP' proxy
+    transformer.  The following type synonym simplifies type signatures.
+
+    Use 'runEitherP' / 'runEitherK' from the re-exported
+    @Control.Proxy.Trans.Either@ to convert 'ExceptionP' back to the base
+    monad
+
+    This module does not re-export 'E.throw', 'E.catch', and 'E.handle' from
+    @Control.Proxy.Trans.Either@ and instead defines new versions similar to the
+    API from @Control.Exception@.  If you want the old versions you will need to
+    import them qualified.
+-}
+
+-- | A proxy transformer that stores exceptions using 'EitherP'
+type ExceptionP = EitherP Ex.SomeException
+
+-- | Analogous to 'Ex.throwIO' from @Control.Exception@
+throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> ExceptionP p a' a b' b m r
+throw = E.throw . Ex.toException
+
+-- | Analogous to 'Ex.catch' from @Control.Exception@
+catch
+ :: (Ex.Exception e, Monad m, P.Proxy p)
+ => ExceptionP p a' a b' b m r         -- ^ Original computation
+ -> (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
+ -> ExceptionP p a' a b' b m r
+catch p f = p `E.catch` (\someExc ->
+    case Ex.fromException someExc of
+        Nothing -> E.throw someExc
+        Just e  -> f e )
+
+-- | Analogous to 'Ex.handle' from @Control.Exception@
+handle
+ :: (Ex.Exception e, Monad m, P.Proxy p)
+ => (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
+ -> ExceptionP p a' a b' b m r         -- ^ Original computation
+ -> ExceptionP p a' a b' b m r
+handle = flip catch
+
 data Status = Status {
     restore    :: forall a . IO a -> IO a,
     upstream   :: IORef (IO ())          ,
@@ -80,13 +120,55 @@ instance Monad SafeIO where
     m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
 
 {-| Convert back to the 'IO' monad, running all dropped finalizers at the very
-    end
+    end and rethrowing any checked exceptions
 
     This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
     during 'try' or 'tryIO'.
 -}
-runSafeIO :: SafeIO r -> IO r
+runSafeIO :: SafeIO (Either Ex.SomeException r) -> IO r
 runSafeIO m =
+    Ex.mask $ \restore -> do
+        huRef <- newIORef (return ())
+        hdRef <- newIORef (return ())
+        e <- runReaderT (unSafeIO m) (Status restore huRef hdRef)
+            `Ex.finally` (do
+                hu <- readIORef huRef
+                hu
+                hd <- readIORef hdRef
+                hd )
+        case e of
+            Left exc -> Ex.throwIO exc
+            Right r  -> return r
+
+{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
+    end and rethrowing any checked exceptions
+
+    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
+    unmasks them during 'try' or 'tryIO'.
+-}
+runSaferIO :: SafeIO (Either Ex.SomeException r) -> IO r
+runSaferIO m =
+    Ex.uninterruptibleMask $ \restore -> do
+        huRef <- newIORef (return ())
+        hdRef <- newIORef (return ())
+        e <- runReaderT (unSafeIO m) (Status restore huRef hdRef)
+            `Ex.finally` (do
+                hu <- readIORef huRef
+                hu
+                hd <- readIORef hdRef
+                hd )
+        case e of
+            Left exc -> Ex.throwIO exc
+            Right r  -> return r
+
+{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
+    end and preserving exceptions as 'Left's
+
+    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
+    during 'try' or 'tryIO'.
+-}
+trySafeIO :: SafeIO e -> IO e
+trySafeIO m =
     Ex.mask $ \restore -> do
         huRef <- newIORef (return ())
         hdRef <- newIORef (return ())
@@ -97,13 +179,13 @@ runSafeIO m =
             hd )
 
 {-| Convert back to the 'IO' monad, running all dropped finalizers at the very
-    end
+    end and preserving exceptions as 'Left's
 
     This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
     unmasks them during 'try' or 'tryIO'.
 -}
-runSaferIO :: SafeIO r -> IO r
-runSaferIO m =
+trySaferIO :: SafeIO e -> IO e
+trySaferIO m =
     Ex.uninterruptibleMask $ \restore -> do
         huRef <- newIORef (return ())
         hdRef <- newIORef (return ())
@@ -112,6 +194,7 @@ runSaferIO m =
             hu
             hd <- readIORef hdRef
             hd )
+
 
 {- I don't export registerK/register only because people rarely want to guard
    solely against premature termination.  Usually they also want to guard
@@ -183,17 +266,6 @@ register
 register morph h p = registerK morph h (\_ -> p) undefined
 {- This is safe and there is a way that does not use 'undefined' if I slightly
    restructure the Proxy type class, but this will work for now. -}
-
-{- $exceptionp
-    'ExceptionP' is a type synonym around 'EitherP', so use 'runEitherP' /
-    'runEitherK' to convert it back to the base 'P.Proxy'.
-
-    Also, you may use the more general 'E.throw' and 'E.catch' functions from
-    @Control.Proxy.Trans.Either@ if you prefer.
--}
-
--- | A proxy transformer that stores exceptions using 'EitherP'
-type ExceptionP = EitherP Ex.SomeException
 
 {- $check
     The following @try@ functions are the only way to convert 'IO' actions to
@@ -280,29 +352,6 @@ tryK = (try .)
 tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
     Ex.try $ restore s io
-
--- | Analogous to 'Ex.throwIO' from @Control.Exception@
-throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> ExceptionP p a' a b' b m r
-throw = E.throw . Ex.toException
-
--- | Analogous to 'Ex.catch' from @Control.Exception@
-catch
- :: (Ex.Exception e, Monad m, P.Proxy p)
- => ExceptionP p a' a b' b m r         -- ^ Original computation
- -> (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
- -> ExceptionP p a' a b' b m r
-catch p f = p `E.catch` (\someExc ->
-    case Ex.fromException someExc of
-        Nothing -> E.throw someExc
-        Just e  -> f e )
-
--- | Analogous to 'Ex.handle' from @Control.Exception@
-handle
- :: (Ex.Exception e, Monad m, P.Proxy p)
- => (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
- -> ExceptionP p a' a b' b m r         -- ^ Original computation
- -> ExceptionP p a' a b' b m r
-handle = flip catch
 
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
