@@ -6,6 +6,7 @@ module Control.Proxy.Safe (
     -- * Exception Handling
     -- $exceptionp
     module Control.Proxy.Trans.Either,
+    module SomeException,
     ExceptionP,
     throw,
     catch,
@@ -39,6 +40,7 @@ module Control.Proxy.Safe (
     ) where
 
 import qualified Control.Exception as Ex
+import Control.Exception as SomeException (SomeException)
 import Control.Applicative (Applicative(pure, (<*>)))
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
@@ -67,10 +69,12 @@ import Prelude hiding (catch)
     @Control.Proxy.Trans.Either@ and instead defines new versions similar to the
     API from @Control.Exception@.  If you want the old versions you will need to
     import them qualified.
+
+    This module only re-exports 'SomeException' from @Control.Exception@.
 -}
 
 -- | A proxy transformer that stores exceptions using 'EitherP'
-type ExceptionP = EitherP Ex.SomeException
+type ExceptionP = EitherP SomeException
 
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> ExceptionP p a' a b' b m r
@@ -126,7 +130,7 @@ instance Monad SafeIO where
     This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
     during 'try' or 'tryIO'.
 -}
-runSafeIO :: SafeIO (Either Ex.SomeException r) -> IO r
+runSafeIO :: SafeIO (Either SomeException r) -> IO r
 runSafeIO m =
     Ex.mask $ \restore -> do
         huRef <- newIORef (return ())
@@ -147,7 +151,7 @@ runSafeIO m =
     This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
     unmasks them during 'try' or 'tryIO'.
 -}
-runSaferIO :: SafeIO (Either Ex.SomeException r) -> IO r
+runSaferIO :: SafeIO (Either SomeException r) -> IO r
 runSaferIO m =
     Ex.uninterruptibleMask $ \restore -> do
         huRef <- newIORef (return ())
