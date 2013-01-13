@@ -34,7 +34,8 @@ module Control.Proxy.Safe (
     -- * Prompt Finalization
     -- $prompt
     unsafeCloseU,
-    unsafeCloseD
+    unsafeCloseD,
+    unsafeClose
     ) where
 
 import qualified Control.Exception as Ex
@@ -551,3 +552,16 @@ unsafeCloseD = do
         return (hdRef, hd)
     tryIO hd
     lift $ SafeIO $ lift $ writeIORef hdRef (return ())
+
+{-| 'unsafeClose' calls all registered finalizers
+
+    'unsafeClose' is a Kleisli arrow so that you can easily seal terminating
+    proxies if there is a risk of delayed finalization:
+
+> (producer >-> (takeB_ 10 >=> unsafeClose) >-> consumer) >=> later
+-}
+unsafeClose :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
+unsafeClose r = do
+    unsafeCloseU
+    unsafeCloseD
+    return r
