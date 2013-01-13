@@ -14,6 +14,7 @@ module Control.Proxy.Safe (
     module Control.Proxy.Trans.Either,
 
     -- * Checked Exceptions
+    -- $check
     CheckP(..),
     tryK,
     tryIO,
@@ -58,11 +59,12 @@ data Status = Status {
     upstream   :: IORef (IO ())          ,
     downstream :: IORef (IO ())          }
 
-{-| 'SafeIO' extends the 'IO' monad with the ability to selectively unmask
-    computations and store registered finalizers
+{-| 'SafeIO' masks asynchronous exceptions by default, and only unmasks them
+    during 'try' or 'tryIO' blocks in order to check all asynchronous
+    exceptions.
 
-    'SafeIO' purposefully does not implement 'MonadIO'.  Use 'tryIO' to safely
-    introduce 'IO' actions.
+    'SafeIO' also saves all finalizers dropped as a result of premature
+    termination and runs them when the 'P.Session' completes.
 -}
 newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Status IO r }
 
@@ -183,15 +185,21 @@ register morph h p = registerK morph h (\_ -> p) undefined
    restructure the Proxy type class, but this will work for now. -}
 
 {- $exceptionp
-    'ExceptionP' is a type synonym around 'EitherP' from
-    @Control.Proxy.Trans.Either@.  This means that you can use the more general
-    'throw' and 'catch' functions for 'EitherP' if you prefer.
+    'ExceptionP' is a type synonym around 'EitherP', so use 'runEitherP' /
+    'runEitherK' to convert it back to the base 'P.Proxy'.
 
-    Also, use 'runEitherP' or 'runEitherK' to convert it back to the base proxy.
+    Also, you may use the more general 'E.throw' and 'E.catch' functions from
+    @Control.Proxy.Trans.Either@ if you prefer.
 -}
 
 -- | A proxy transformer that stores exceptions using 'EitherP'
 type ExceptionP = EitherP Ex.SomeException
+
+{- $check
+    The following @try@ functions are the only way to convert 'IO' actions to
+    'SafeIO'.  These functions check all exceptions, including asynchronous
+    exceptions, and store them in the 'ExceptionP' proxy transformer.
+-}
 
 {-| You can retroactively check all exceptions for proxies that implement
     'CheckP'.
