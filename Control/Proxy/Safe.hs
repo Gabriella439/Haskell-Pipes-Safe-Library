@@ -111,19 +111,23 @@ runSaferIO m =
             hd <- readIORef hdRef
             hd )
 
-{- 'registerK' should satisfy the following laws:
+{- I don't export registerK/register only because people rarely want to guard
+   solely against premature termination.  Usually they also want to guard
+   against exceptions, too.
 
-* 'registerK' defines a functor from finalizers to functions
+    'registerK' should satisfy the following laws:
 
-> registerK nat m1 . registerK nat m2 = registerK nat (m1 >> m2)
+* 'registerK' defines a functor from finalizers to functions:
+
+> registerK morph m1 . registerK morph m2 = registerK morph (m2 >> m1)
 > 
-> registerK nat (return ()) = id
+> registerK morph (return ()) = id
 
-* 'registerK' is a functor between Kleisli categories
+* 'registerK' is a functor between Kleisli categories:
 
-> registerK nat m (p1 >=> p2) = registerK nat m p1 >=> registerK nat m p2
+> registerK morph m (p1 >=> p2) = registerK morph m p1 >=> registerK morph m p2
 >
-> registerK nat m return = return
+> registerK morph m return = return
 
     These laws are not provable using the current set of proxy laws, mainly
     because the proxy laws do not yet specify how proxies interact with the
@@ -139,8 +143,8 @@ registerK
  -> IO ()
  -> (b' -> p a' a b' b m r)
  -> (b' -> p a' a b' b m r)
-registerK nat h k =
-    P.runIdentityK (P.hoistK nat up) >-> k >-> P.runIdentityK (P.hoistK nat dn)
+registerK morph h k =
+    P.runIdentityK (P.hoistK morph up) >-> k >-> P.runIdentityK (P.hoistK morph dn)
   where
     dn b'0 = do
         b0 <- P.request b'0
@@ -174,7 +178,7 @@ register
  -> IO ()
  -> p a' a b' b m r
  -> p a' a b' b m r
-register nat h p = registerK nat h (\_ -> p) undefined
+register morph h p = registerK morph h (\_ -> p) undefined
 {- This is safe and there is a way that does not use 'undefined' if I slightly
    restructure the Proxy type class, but this will work for now. -}
 
@@ -192,14 +196,16 @@ type ExceptionP = EitherP Ex.SomeException
 {-| You can retroactively check all exceptions for proxies that implement
     'CheckP'.
 
-    'try' is a both a monad morphism and a proxy morphism, which means that
-    @tryK = (try .)@ defines a functor that preserves five categories.
+    'try' is /almost/ a proxy morphism, which means that @tryK = (try .)@
+    defines a functor that preserves five categories.  I say \"almost\" because
+    it unmasks asynchronous exceptions for 'return'.  However, this does not
+    affect the exception safety of this implementation.
 
     Functor between \'@K@\'leisli categories:
 
 > tryK f >=> tryK g = tryK (f >=> g)
 >
-> tryK return = return
+> tryK return = return  -- Not true for asynchronous exceptions
 
     Functor between 'P.Proxy' categories:
 
@@ -261,7 +267,7 @@ tryK = (try .)
 
 > (tryIO .) f >=> (tryIO .) g = (tryIO .) (f >=> g)
 >
-> (tryIO .) return = return
+> (tryIO .) return = return  -- Not true for asynchronous exceptions
 -}
 tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
@@ -300,16 +306,16 @@ handle = flip catch
     The first argument lifts 'onAbort' to work with other base monads.  Use
     'id' if your base monad is already 'SafeIO'.
 
-> do x <- onAbort nat fin m
->    onAbort nat fin (f x)
-> = onAbort nat fin $ do x <- m
->                            f x
+> do x <- onAbort morph fin m
+>    onAbort morph fin (f x)
+> = onAbort morph fin $ do x <- m
+>                          f x
 >
-> onAbort (return x) = return x
+> onAbort morph fin (return x) = return x
 
-> onAbort nat fin1 . onAbort nat fin2 = onAbort nat (fin2 >> fin1)
+> onAbort morph fin1 . onAbort morph fin2 = onAbort morph (fin2 >> fin1)
 >
-> onAbort nat (return ()) = id
+> onAbort morph (return ()) = id
 -}
 onAbort
  :: (Monad m, P.Proxy p)
@@ -317,10 +323,10 @@ onAbort
  -> IO r'                         -- ^ Action to run on abort
  -> ExceptionP p a' a b' b m r    -- ^ Guarded computation
  -> ExceptionP p a' a b' b m r
-onAbort nat after p =
-    register nat (after >> return ()) p
+onAbort morph after p =
+    register morph (after >> return ()) p
         `E.catch` (\e -> do
-            P.hoist nat $ tryIO after
+            P.hoist morph $ tryIO after
             E.throw e )
 
 {-| Analogous to 'Ex.finally' from @Control.Exception@
@@ -328,9 +334,9 @@ onAbort nat after p =
     The first argument lifts 'finally' to work with other base monads.  Use 'id'
     if your base monad is already 'SafeIO'.
 
-> finally nat after p = do
->     r <- onAbort nat after p
->     P.hoist nat $ tryIO after
+> finally morph after p = do
+>     r <- onAbort morph after p
+>     hoist morph $ tryIO after
 >     return r
 -}
 finally
@@ -339,9 +345,9 @@ finally
  -> IO r'                        -- ^ Guaranteed final action
  -> ExceptionP p a' a b' b m r   -- ^ Guarded computation
  -> ExceptionP p a' a b' b m r
-finally nat after p = do
-    r <- onAbort nat after p
-    P.hoist nat $ tryIO after
+finally morph after p = do
+    r <- onAbort morph after p
+    P.hoist morph $ tryIO after
     return r
 
 {-| Analogous to 'Ex.bracket' from @Control.Exception@
@@ -352,10 +358,9 @@ finally nat after p = do
     'bracket' guarantees that if the resource acquisition completes, then the
     resource will be released.
 
-> bracket nat before after p = do
->     h <- P.hoist nat $ tryIO before
->     let finalizer = after h
->     finally nat finalizer (p h)
+> bracket morph before after p = do
+>     h <- hoist morph $ tryIO before
+>     finally morph (after h) (p h)
 -}
 bracket
  :: (Monad m, P.Proxy p)
@@ -364,19 +369,18 @@ bracket
  -> (h -> IO r')                       -- ^ Release resource
  -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
  -> ExceptionP p a' a b' b m r
-bracket nat before after p = do
-    h <- P.hoist nat $ tryIO before
-    let finalizer = after h
-    finally nat finalizer (p h)
+bracket morph before after p = do
+    h <- P.hoist morph $ tryIO before
+    finally morph (after h) (p h)
 
 {-| Analogous to 'Ex.bracket_' from @Control.Exception@
 
     The first argument lifts 'bracket_' to work with any base monad.  Use 'id'
     if your base monad is already 'SafeIO'.
 
-> bracket_ nat before after p = do
->     P.hoist nat $ tryIO before
->     finally nat after p
+> bracket_ morph before after p = do
+>     hoist morph $ tryIO before
+>     finally morph after p
 -}
 bracket_
  :: (Monad m, P.Proxy p)
@@ -385,19 +389,18 @@ bracket_
  -> IO r2                         -- ^ Release resource
  -> ExceptionP p a' a b' b m r    -- ^ Use resource
  -> ExceptionP p a' a b' b m r
-bracket_ nat before after p = do
-    P.hoist nat $ tryIO before
-    finally nat after p
+bracket_ morph before after p = do
+    P.hoist morph $ tryIO before
+    finally morph after p
 
 {-| Analogous to 'Ex.bracketOnAbort' from @Control.Exception@
 
     The first argument lifts 'bracketOnAbort' to work with any base monad.  Use
     'id' if your base monad is already 'SafeIO'.
 
-> bracketOnAbort nat before after p = do
->     h <- P.hoist nat $ tryIO before
->     let finalizer = after h
->     onAbort nat finalizer (p h)
+> bracketOnAbort morph before after p = do
+>     h <- hoist morph $ tryIO before
+>     onAbort morph (after h) (p h)
 -}
 bracketOnAbort
  :: (Monad m, P.Proxy p)
@@ -406,11 +409,9 @@ bracketOnAbort
  -> (h -> IO r')                       -- ^ Release resource
  -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
  -> ExceptionP p a' a b' b m r
-bracketOnAbort nat before after p = do
-    h <- P.hoist nat $ tryIO before
-    let finalizer = after h
-    onAbort nat finalizer (p h)
-
+bracketOnAbort morph before after p = do
+    h <- P.hoist morph $ tryIO before
+    onAbort morph (after h) (p h)
 
 {- $prompt
     This implementation will not /promptly/ finalize a 'P.Proxy' if another
@@ -437,9 +438,7 @@ bracketOnAbort nat before after p = do
 > p1 >-> p3                         -- idT >-> p      = p
 
     Answering \"no\" means that @p3@ would be unable to promptly finalize a
-    'P.Proxy' immediately upstream of it.  More generally, the 'P.Proxy' laws
-    and the 'Monad' laws say that we cannot distinguish between proxies that are
-    \"directly\" or \"indirectly\" composed with a given 'P.Proxy'.
+    'P.Proxy' immediately upstream of it.
 
     There is a solution that permits perfectly prompt finalization, but it
     requires indexed monads to guarantee the necessary safety through the type
