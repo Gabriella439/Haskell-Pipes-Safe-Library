@@ -1,6 +1,6 @@
--- | Resource acquisition integrated with proxies
+-- | Exception handling and resource management integrated with proxies
 
-{-# LANGUAGE Rank2Types, CPP, KindSignatures, Safe #-}
+{-# LANGUAGE Rank2Types, CPP, KindSignatures #-}
 
 module Control.Proxy.Safe (
     -- * Safe IO
