@@ -48,8 +48,9 @@ import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
 import Control.Proxy ((>->))
-import qualified Control.Proxy.Trans.Identity as I
+import Control.Proxy.Trans.Identity
 import qualified Control.Proxy.Trans.Either as E
+import qualified Control.Proxy.Trans.Reader as R
 import Control.Proxy.Trans.Either hiding (throw, catch, handle)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 #if MIN_VERSION_base(4,6,0)
@@ -341,6 +342,12 @@ instance CheckP PC.ProxyCorrect where
                     PC.Respond b  fb' ->
                         return (PC.Respond b  (\b' -> go (fb' b')))
                     PC.Pure r -> return (PC.Pure (Right r)) )))
+
+instance (CheckP p) => CheckP (IdentityP p) where
+    try = EitherP . IdentityP . runEitherP . try . runIdentityP
+
+instance (CheckP p) => CheckP (R.ReaderP i p) where
+    try p = EitherP $ R.ReaderP $ \i -> runEitherP $ try (R.unReaderP p i)
 
 -- | Check all exceptions for a 'P.Proxy' \'@K@\'leisli arrow
 tryK
