@@ -544,25 +544,27 @@ bracketOnAbort morph before after p = do
 
 {-| 'unsafeCloseU' calls all finalizers registered upstream of the current
     'P.Proxy'. -}
-unsafeCloseU :: (P.Proxy p) => ExceptionP p a' a b' b SafeIO ()
-unsafeCloseU = do
+unsafeCloseU :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
+unsafeCloseU r = do
     (huRef, hu) <- lift $ SafeIO $ do
         huRef <- asks upstream
         hu    <- lift $ readIORef huRef
         return (huRef, hu)
     tryIO hu
     lift $ SafeIO $ lift $ writeIORef huRef (return ())
+    return r
 
 {-| 'unsafeCloseD' calls all finalizers registered downstream of the current
     'P.Proxy'. -}
-unsafeCloseD :: (P.Proxy p) => ExceptionP p a' a b' b SafeIO ()
-unsafeCloseD = do
+unsafeCloseD :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
+unsafeCloseD r = do
     (hdRef, hd) <- lift $ SafeIO $ do
         hdRef <- asks downstream
         hd    <- lift $ readIORef hdRef
         return (hdRef, hd)
     tryIO hd
     lift $ SafeIO $ lift $ writeIORef hdRef (return ())
+    return r
 
 {-| 'unsafeClose' calls all registered finalizers
 
@@ -572,7 +574,4 @@ unsafeCloseD = do
 > (producer >-> (takeB_ 10 >=> unsafeClose) >-> consumer) >=> later
 -}
 unsafeClose :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
-unsafeClose r = do
-    unsafeCloseU
-    unsafeCloseD
-    return r
+unsafeClose = unsafeCloseU P.>=> unsafeCloseD
