@@ -203,6 +203,36 @@ test.txt
 "Line 4"
 {Closing File}
 
+    You can even catch and resume from asynchronous exceptions:
+
+> heartbeat
+>   :: Proxy p
+>   => ExceptionP p a' a b' b SafeIO r -> ExceptionP p a' a b' b SafeIO r
+> heartbeat p = p `catch` (\e -> do
+>            let _ = e :: SomeException
+>            tryIO $ putStrLn "<Nice try!>"
+>            heartbeat p )
+>
+> main = do
+>     tid <- myThreadId
+>     forkIO $ forever $ do
+>         threadDelay 5000000  -- Every 5 seconds
+>         killThread tid
+>     trySafeIO $ runProxy $ runEitherK $
+>         heartbeat . (openFileS >-> tryK printD)
+
+>>> main
+Select a file:
+te<Nice Try!>
+Select a file:
+st.txt
+{File Open}
+"Line 1"
+"Line 2"
+"Line 3"
+"Line 4"
+{Closing File}
+
 -}
 
 {- $checked
@@ -221,7 +251,7 @@ test.txt
 >     forkIO $ do
 >         threadDelay 1000
 >         killThread tID
->     trySafeIO $ runProxy $ runEitherK $
+>     runSafeIO $ runProxy $ runEitherK $
 >         foreverK (readFileS "test.txt") >-> tryK printD
 
 >>> main
@@ -335,7 +365,7 @@ Look busy
     mask pure segments of code if you don't wrap them in 'try', which just
     delays the asynchronous exception until the next 'IO' action.
 
-    There is one upgrade scenario that this library does not cover, which is
+    There is one upgrade scenario that this library does not yet cover, which is
     upgrading proxies that have base monads other than 'IO'.  For now, you will
     have to rewrite the proxy if that happens.
 -}
@@ -423,14 +453,30 @@ Look busy
 -}
 
 {- $conclusion
+    @pipes-safe@ lets you package streaming resources into self-contained units
+    that include:
+
+    * their allocation/deallocation code, and
+
+    * their exception-handling strategies.
+
+    @pipes-safe@ reuses 'EitherP' to let you easily reason about how local
+    exception handling behaves.  More importantly, multiple resources can
+    concurrently coexist with each other and not interfere with each other's
+    exception-handling logic.  @pipes-safe@ isolates each streaming component's
+    behavior so that you reason about it how it deals with failure independently
+    of other components.
+
     I hope this inspires people to package up more powerful streaming
-    abstractions into indivisible units, such as:
+    abstractions into indivisible units.  Also, don't limit yourself to simple
+    file or network resources.  You will find that @pipes-safe@ can also
+    simplify and package up:
 
-    * network connections,
+    * progress meters,
 
-    * input \/ output devices, and
+    * input devices (i.e. mice and keyboards), and
 
     * user interfaces.
 
-    @pipes-safe@ guarantees lets you abstract away 
+    I encourage you to be creative!
 -}
