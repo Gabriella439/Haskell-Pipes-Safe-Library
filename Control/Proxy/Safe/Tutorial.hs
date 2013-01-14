@@ -11,6 +11,9 @@ module Control.Proxy.Safe.Tutorial (
     -- * Resource Safety
     -- $safety
 
+    -- * Native Exception Handling
+    -- $native
+
     -- * Checked Exceptions
     -- $checked
 
@@ -23,8 +26,11 @@ module Control.Proxy.Safe.Tutorial (
     -- * Upgrade Monad Transformers
     -- $trybase
 
-    -- * Backwards Compatible
+    -- * Backwards Compatibility
     -- $backwards
+
+    -- * Laziness
+    -- $laziness
 
     -- * Conclusion
     -- $conclusion
@@ -32,6 +38,7 @@ module Control.Proxy.Safe.Tutorial (
 
 import Control.Proxy
 import Control.Proxy.Safe
+import System.IO (withFile)
 
 {- $intro
     @pipes-safe@ adds exception-safe resource management to the @pipes@
@@ -53,7 +60,7 @@ import Control.Proxy.Safe
 >  :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
 > readFileS file () = bracket id
 >     (do h <- openFile file ReadMode
->         putStrLn "{File Open}"
+>         putStrLn $ "{File Open}"
 >         return h )
 >     (\h -> do putStrLn "{Closing File}"
 >               hClose h )
@@ -74,7 +81,7 @@ import Control.Proxy.Safe
     * 'bracket' requires 'SafeIO' as the base monad, which checks all
       asynchronous exceptions and stores registered finalizers
 
-    But what if I already wrote a 'Consumer' that doesn't use 'ExceptionP' or
+    But what if we already wrote a 'Consumer' that doesn't use 'ExceptionP' or
     'SafeIO'?
 
 > printer :: (Proxy p, Show a) => () -> Consumer p a IO r
@@ -82,10 +89,14 @@ import Control.Proxy.Safe
 >     a <- request ()
 >     lift $ print a
 
-    Do I need to rewrite it to use resource management abstractions?  Not at
-    all!  You can use 'try' / 'tryK' to automatically promote any \"unmanaged\"
+    Do we need to rewrite it to use resource management abstractions?  Not at
+    all!  We can use 'try' / 'tryK' to automatically promote any \"unmanaged\"
     proxy to a \"managed\" proxy:
 
+> tryK
+>  :: CheckP p
+>  => (q -> p a' a b' b IO r) -> q -> ExceptionP p a' a b' b SafeIO r 
+>
 > tryK printer :: (CheckP p, Show a) => () -> Consumer (Exception p) a SafeIO r
 >
 > session :: (CheckP p) => () -> Session (Exception p) SafeIO ()
@@ -147,10 +158,11 @@ import Control.Proxy.Safe
 {Closing File}
 *** Exception: thread killed
 
-    ... yet 'bracket' still ensures deterministic resource finalization.
+    ... yet 'bracket' still ensures deterministic resource finalization in the
+    face of asynchronous exceptions.
 -}
 
-{- $checked
+{- $native
     Let's study the types a bit to understand what is going on:
 
 > type ExceptionP = EitherP SomeException
@@ -169,11 +181,39 @@ import Control.Proxy.Safe
 >  -> (e -> ExceptionP p a' a b' b m r)
 >  -> ExceptionP p a' a b' b m r
 
-    These let you embed native exception handling into proxies.
+    These let you embed native exception handling into proxies.  For example,
+    we could exception handling to recover from a file opening error:
 
-    These work because 'SafeIO' checks all exceptions and stores them using the
-    'ExceptionP' proxy transformer.  'SafeIO' masks all asynchronous exceptions     by default and only unmasks them in the middle of a 'try' or 'tryIO' block.
-    This prevents asynchronous exceptions from leaking between the cracks.
+> openFileS :: (CheckP p) => () -> Producer (ExceptionP p) String SafeIO ()
+> openFileS () = (do
+>     tryIO $ putStrLn "Select a file:"
+>     file <- tryIO getLine
+>     readFileS file ())
+>   `catch` (\e -> do
+>       tryIO $ print (e :: IOException)
+>       openFileS () )
+
+>>> runSafeIO $ runProxy $ runEitherK $ openFileS >-> tryK printD
+Select a file:
+oops
+oops: openFile: does not exist (No such file or directory)
+Select a file:
+test.txt
+{File Open}
+"Line 1"
+"Line 2"
+"Line 3"
+"Line 4"
+{Closing File}
+
+-}
+
+{- $checked
+    Exception handling works because 'SafeIO' checks all exceptions and stores
+    them using the 'ExceptionP' proxy transformer.  'SafeIO' masks all
+    asynchronous exceptions by default and only unmasks them in the middle of a
+    'try' or 'tryIO' block.  This prevents asynchronous exceptions from leaking
+    between the cracks.
 
     'runSafeIO' reraises the stored exception when the 'Session' completes, but
     you can also choose to preserve the exception as a 'Left' by using
@@ -338,15 +378,96 @@ Look busy
 -}
 
 {- $backwards
-    
+    The biggest strength of @pipes-safe@ is that it requires no buy-in from the
+    rest of the @pipes@ ecosystem.  Many proxies require no resource-management
+    at all, so why should they clutter their implementation with such concerns?
+
+    @pipes-safe@ lets you write these proxies using the simpler \"unmanaged\"
+    types, and then transparently promote them with 'try' later on if you need
+    to use them within a resource-managed 'Session'.
+
+    For example, the main body of @readFileS@ is identical to the implementation
+    of 'hGetLineS' from the proxy prelude:
+
+> hGetLineS :: (Proxy p) => Handle -> () -> Producer p String IO ()
+> hGetLineS h () = runIdentityP loop where
+>     loop = do
+>         eof <- lift $ hIsEOF h
+>         if eof
+>             then return ()
+>             else do
+>                 str <- lift $ hGetLine h
+>                 respond str
+>                 loop
+
+    We can reuse 'hGetLineS' by define a 'withFileS' that abstracts away the
+    handle management:
+
+> withFileS
+>  :: (Proxy p)
+>  => FilePath
+>  -> (Handle -> b' -> ExceptionP p a' a b' b SafeIO r)
+>  -> b' -> ExceptionP p a' a b' b SafeIO r
+> withFileS file p b' = bracket id
+>     (do h <- openFile file ReadMode
+>         putStrLn "{File Open}"
+>         return h )
+>     (\h -> do putStrLn "{Closing File}"
+>               hClose h )
+>     (\h -> p h b')
+
+    ... and now we can 'readFileS' in terms of 'withFileS' and 'hGetLineS':
+
+> readFileS file = withFileS file (\h -> tryK (hGetLineS h))
+
+    If 'hGetLineS' throws an error within its own code, 'withFileS' will still
+    properly finalize the handle.  This works in spite of 'hGetLineS' never
+    having been written to be resource safe.
+-}
+
+{- $laziness
+    Now you no longer need to open all resources before a 'Session' and close
+    them afterwards.  Instead, you can lazily open resources in response to
+    demand and trust that they finalize safely upon termination:
+
+> files () = do
+>     readFileS "file1.txt" () -- 3 lines long
+>     readFileS "file2.txt" () -- 4 lines long
+> -- or: files = readFileS "file1.txt" >=> readFileS "file2.txt"
+
+>>> runSafeIO $ runProxy $ runEitherK $ files >-> takeB_ 2 >-> printD
+{File Open}
+"Line 1 of file1.txt"
+"Line 2 of file1.txt"
+{Closing File}
+
+    @\"file2.txt\"@ never opens because we only demand two lines.
+
+    Even if we use both files, we never keep more than one handle open at a
+    time:
+ 
+>>> runSafeIO $ runProxy $ runEitherK $ files >-> takeB_ 5 >-> printD
+{File Open}
+"Line 1 of file1.txt"
+"Line 2 of file1.txt"
+"Line 3 of file1.txt"
+{Closing File}
+{File Open}
+"Line 1 of file2.txt"
+"Line 2 of file2.txt"
+{Closing File}
+
 -}
 
 {- $conclusion
-    
-    The biggest strength
-    * Add resource management to proxies
+    I hope this inspires people to package up more powerful streaming
+    abstractions into indivisible units, such as:
 
-    * 
+    * network connections,
 
-    * Extend proxies with asynchronous 
+    * input \/ output devices, and
+
+    * user interfaces.
+
+    @pipes-safe@ guarantees lets you abstract away 
 -}
