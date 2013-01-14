@@ -6,7 +6,7 @@ module Control.Proxy.Safe (
     -- * Exception Handling
     -- $exceptionp
     module Control.Proxy.Trans.Either,
-    module SomeException,
+    module Exception,
     ExceptionP,
     throw,
     catch,
@@ -40,7 +40,7 @@ module Control.Proxy.Safe (
     ) where
 
 import qualified Control.Exception as Ex
-import Control.Exception as SomeException (SomeException)
+import Control.Exception as Exception (SomeException, Exception)
 import Control.Applicative (Applicative(pure, (<*>)))
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
@@ -315,7 +315,7 @@ register morph h p = registerK morph h (\_ -> p) undefined
 >
 > tryK respond = respond
 -}
-class CheckP p where
+class (P.Proxy p) => CheckP p where
     try :: p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r
 
 instance CheckP PF.ProxyFast where
@@ -558,7 +558,7 @@ unsafeCloseU = do
 unsafeCloseD :: (P.Proxy p) => ExceptionP p a' a b' b SafeIO ()
 unsafeCloseD = do
     (hdRef, hd) <- lift $ SafeIO $ do
-        hdRef <- asks upstream
+        hdRef <- asks downstream
         hd    <- lift $ readIORef hdRef
         return (hdRef, hd)
     tryIO hd
