@@ -14,11 +14,17 @@ module Control.Proxy.Safe.Tutorial (
     -- * Checked Exceptions
     -- $checked
 
-    -- * Upgrade Unmanaged Proxies
-    -- $try
-
     -- * Prompt Finalization
     -- $prompt
+
+    -- * Upgrade Proxy Transformers
+    -- $trytransformer
+
+    -- * Upgrade Monad Transformers
+    -- $trybase
+
+    -- * Backwards Compatible
+    -- $backwards
 
     -- * Conclusion
     -- $conclusion
@@ -200,7 +206,57 @@ Left thread killed
     * 'runSaferIO' \/ 'trySaferIO' use 'uninterruptibleMask'.
 -}
 
-{- $try
+{- $prompt
+    Resource management primitives like 'bracket' only guarantee prompt
+    finalization in the face of exceptions.  Premature termination of
+    composition will delay the finalizer until the end of the 'Session'.
+
+    For example, consider the following 'Session':
+
+> session () = do
+>    (readFileS "test.hs" >-> takeB_ 2 >-> tryK printD) ()
+>    tryIO $ putStrLn "Look busy"
+
+>>> runSafeIO $ runProxy $ runEitherK session
+{File Open}
+"Line 1"
+"Line 2"
+Look busy
+{Closing File}
+
+    @readFileS@ is interrupted when @takeB_@ terminates, so it does not get
+    finalized until the very end of the 'Session'.
+
+    The \"Prompt Finalization\" section of "Control.Proxy.Safe" documents why
+    this behavior is the only safe default.  However, often we can prove that
+    prompter finalization is safe, so we take matters into our own hands and
+    finalize things as promptly as we choose:
+
+session () = do
+    (readFileS "test.hs" >-> (takeB_ 2 >=> unsafeClose) >-> tryK printD) ()
+    tryIO $ putStrLn "Look busy"
+
+>>> runSafeIO $ runProxy $ runEitherK session
+{File Open}
+"import Control.Concurrent"
+"import Control.Monad (unless)"
+{Closing File}
+Look busy
+
+    The documentation explains when you can safely use these prompt finalization
+    primitives.
+
+    Fortunately, most of the time you will just assemble linear composition
+    chains that look like this:
+
+> runSafeIO $ runProxy $ runEitherK $ p1 >-> p2 >-> p3 >-> p4
+
+    ... in which case the end of composition coincides with the end of the
+    'Session' and there is no delay in finalization.  You only need to manually
+    manage prompt finalization if you sequence anything after composition.
+-}
+
+{- $trytransformer
     Not all proxy transformers implement 'try'.  You can look at the instance
     list for 'CheckP' and you will see that it mainly covers the base
     proxy implementations:
@@ -216,13 +272,15 @@ Left thread killed
     This means that you can use 'hoistP' as many times as necessary to map 'try'
     over the base proxy:
 
-> p :: (Proxy p) => Producer (StateP s (MaybeP p)) IO r
+> p :: (CheckP p) => Producer (StateP s (MaybeP p)) IO r
 >
-> hoistP (hoistP try) p :: Producer (StateP s (MaybeP (ExceptionP p))) SafeIO r
+> hoistP (hoistP try) p
+>   :: (CheckP p) => Producer (StateP s (MaybeP (ExceptionP p))) SafeIO r
 
-    'try' is a proxy morphism, meaning it satisfies the same equations as
-    proxy transformers.  The documentation for 'try' lists the full set of
-    equations, but the ones you should remember are:
+    'hoistP' expeccts a proxy morphism for its argument, but is 'try' a proxy
+    morphism?  Yes!  'try' satisfies the proxy morphism laws, which are the same
+    as the proxy transformer laws.  The documentation for 'try' lists the full
+    set of equations, but the ones you should remember are:
 
 > tryK (f >-> g) = tryK f >-> tryK g
 >
@@ -246,37 +304,49 @@ Left thread killed
     delays the asynchronous exception until the next 'IO' action.
 -}
 
-{- $prompt
-    Resource management primitives like 'bracket' only guarantee prompt
-    finalization in the face of exceptions.  Premature termination of
-    composition will delay the finalizer until the end of the 'Session'.
+{- $trybase
+    There is one upgrade scenario that this library doesn't cover yet, not
+    because it is hard, but rather because I'm still deciding on a name for the
+    following type class (suggestions welcome):
 
-    For example, consider the following 'Session':
+> class ??? t where
+>     embed?  -- Not sure what to name this either
+>      :: (forall r' . p1 a' a b' b    m1  r' -> p2 a' a b' b    m2  r')
+>      -> (            p1 a' a b' b (t m1) r  -> p2 a' a b' b (t m2) r )
+>
+> -- There would be instances for most monad transformers
+> instance ??? (EitherT e)
+> instance ??? (ReaderT i)
+> ...
 
-> session () = do
->    (readFileS "test.hs" >-> takeB_ 2 >-> tryK printD) ()
->    tryIO $ putStrLn "Look busy"
+    @embed?@ would define a functor in the category of proxies, mapping proxy
+    morphisms to proxy morphisms and satisfying the functor laws:
 
->>> runSafeIO $ runProxy $ runEitherK session
-{File Open}
-"Line 1"
-"Line 2"
-Look busy
-{Closing File}
+> embed? f . embed? g = embed? (f . g)
+>
+> embed? id = id
 
-    @readFileS@ is interrupted when @takeB_@ terminates, so it does not get
-    finalized until the very end of the 'Session'.
+    ... and you would use it to lift 'try' to work with arbitrary monad
+    transformer stacks in the base monad:
 
-    The \"Prompt Finalization\" section of "Control.Proxy.Safe" documents why
-    this behavior is the only safe default, however, you may choose to trade
-    safety for promptness using primitives like 'unsafeClose', which flushes
-    all upstream and downstream finalizers:
+> p :: (CheckP p) => p a' a b' b (EitherT e (ReaderT i IO) r
+> embed? (embed? try) p
+>   :: (CheckP p) => ExceptionP p a' a b' b (EitherT e (ReaderT i SafeIO)) r
 
+    I will include this type class in a future release once I work out a proper
+    name for it.  Then you will be able to upgrade arbitrary proxies.
+-}
 
-    This does not impact most users as the dominant use case is a linear chain
-    of compositions:
+{- $backwards
+    
 -}
 
 {- $conclusion
     
+    The biggest strength
+    * Add resource management to proxies
+
+    * 
+
+    * Extend proxies with asynchronous 
 -}
