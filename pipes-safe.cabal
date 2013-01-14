@@ -8,18 +8,26 @@ Copyright: 2012 Gabriel Gonzalez
 Author: Gabriel Gonzalez
 Maintainer: Gabriel439@gmail.com
 Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
-Synopsis: Compositional pipelines
+Synopsis: Safety for the pipes ecosystem
 Description:
-    This package adds resource management to the @pipes@ ecosystem, including:
+    This package adds resource management to the @pipes@ ecosystem.  Notable
+    features include:
     .
-    * @bracket@ functionality to lazily manage resources
+    * /Resource management/: Guarantee finalization using @finally@, @bracket@
+      and more
     .
-    * Asynchronous exception safety
+    * /Laziness/: Only acquire resources when you need them
     .
-    * Automatic promotion of unmanaged pipes to managed pipes
+    * /Exception safe/: Even against asynchronous exceptions!
     .
-    You can use these primitives to implement lazy resource management for
-    @pipes@.
+    * /Native Exception Handling/: Catch and resume from exceptions within any
+      @Session@
+    .
+    * /No Buy-in/: Managed pipes play nice with unmanaged pipes
+    .
+    Import @Control.Proxy.Safe@ to use this library
+    .
+    Read @Control.Proxy.Safe.Tutorial@ for an introductory tutorial.
 Category: Control, Pipes, Proxies
 Tested-With: GHC ==7.4.1
 Source-Repository head

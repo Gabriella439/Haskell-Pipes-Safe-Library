@@ -23,9 +23,6 @@ module Control.Proxy.Safe.Tutorial (
     -- * Upgrade Proxy Transformers
     -- $trytransformer
 
-    -- * Upgrade Monad Transformers
-    -- $trybase
-
     -- * Backwards Compatibility
     -- $backwards
 
@@ -241,9 +238,9 @@ Left thread killed
 
     You can even choose whether to use 'mask' or 'uninterruptibleMask':
 
-    * 'runSafeIO' \/ 'trySafeIO' use 'mask'
+    * 'runSafeIO' and 'trySafeIO' both use 'mask'
 
-    * 'runSaferIO' \/ 'trySaferIO' use 'uninterruptibleMask'.
+    * 'runSaferIO' and 'trySaferIO' both use 'uninterruptibleMask'.
 -}
 
 {- $prompt
@@ -269,12 +266,12 @@ Look busy
 
     The \"Prompt Finalization\" section of "Control.Proxy.Safe" documents why
     this behavior is the only safe default.  However, often we can prove that
-    prompter finalization is safe, so we take matters into our own hands and
-    finalize things as promptly as we choose:
+    prompter finalization is safe, in which case we can take matters into our
+    own hands and manually finalize things even more promptly:
 
-session () = do
-    (readFileS "test.hs" >-> (takeB_ 2 >=> unsafeClose) >-> tryK printD) ()
-    tryIO $ putStrLn "Look busy"
+> session () = do
+>     (readFileS "test.hs" >-> (takeB_ 2 >=> unsafeClose) >-> tryK printD) ()
+>     tryIO $ putStrLn "Look busy"
 
 >>> runSafeIO $ runProxy $ runEitherK session
 {File Open}
@@ -282,9 +279,6 @@ session () = do
 "import Control.Monad (unless)"
 {Closing File}
 Look busy
-
-    The documentation explains when you can safely use these prompt finalization
-    primitives.
 
     Fortunately, most of the time you will just assemble linear composition
     chains that look like this:
@@ -306,25 +300,23 @@ Look busy
 > instance (CheckP p) => CheckP (IdentityP p)
 > instance (CheckP p) => CheckP (ReaderP   p)
 
-    However, you actually can upgrade more sophisticated stacks.  I've relaxed
-    the type signature of the 'PFunctor' type class to accept proxy morphisms
-    that change the base monad, so now it accepts 'try' as a valid argument.
-    This means that you can use 'hoistP' as many times as necessary to map 'try'
-    over the base proxy:
+    However, you actually can upgrade more sophisticated proxy transformer
+    stacks.  I've relaxed the type signature of the 'PFunctor' type class to
+    accept proxy morphisms that change the base monad, so now it accepts 'try'
+    as a valid argument.  This means that you can use 'hoistP' as many times as
+    necessary to target 'try' to the base proxy:
 
 > p :: (CheckP p) => Producer (StateP s (MaybeP p)) IO r
 >
 > hoistP (hoistP try) p
 >   :: (CheckP p) => Producer (StateP s (MaybeP (ExceptionP p))) SafeIO r
 
-    'hoistP' expeccts a proxy morphism for its argument, but is 'try' a proxy
+    'hoistP' expects a proxy morphism for its argument, but is 'try' a proxy
     morphism?  Yes!  'try' satisfies the proxy morphism laws, which are the same
     as the proxy transformer laws.  The documentation for 'try' lists the full
     set of equations, but the ones you should remember are:
 
 > tryK (f >-> g) = tryK f >-> tryK g
->
-> tryK idT = idT
 
 > try (request a') = request a'
 
@@ -342,39 +334,10 @@ Look busy
     compromise the safety of this library.  At worst, it will just overzealously
     mask pure segments of code if you don't wrap them in 'try', which just
     delays the asynchronous exception until the next 'IO' action.
--}
 
-{- $trybase
-    There is one upgrade scenario that this library doesn't cover yet, not
-    because it is hard, but rather because I'm still deciding on a name for the
-    following type class (suggestions welcome):
-
-> class ??? t where
->     embed?  -- Not sure what to name this either
->      :: (forall r' . p1 a' a b' b    m1  r' -> p2 a' a b' b    m2  r')
->      -> (            p1 a' a b' b (t m1) r  -> p2 a' a b' b (t m2) r )
->
-> -- There would be instances for most monad transformers
-> instance ??? (EitherT e)
-> instance ??? (ReaderT i)
-> ...
-
-    @embed?@ would define a functor in the category of proxies, mapping proxy
-    morphisms to proxy morphisms and satisfying the functor laws:
-
-> embed? f . embed? g = embed? (f . g)
->
-> embed? id = id
-
-    ... and you would use it to lift 'try' to work with arbitrary monad
-    transformer stacks in the base monad:
-
-> p :: (CheckP p) => p a' a b' b (EitherT e (ReaderT i IO) r
-> embed? (embed? try) p
->   :: (CheckP p) => ExceptionP p a' a b' b (EitherT e (ReaderT i SafeIO)) r
-
-    I will include this type class in a future release once I work out a proper
-    name for it.  Then you will be able to upgrade arbitrary proxies.
+    There is one upgrade scenario that this library does not cover, which is
+    upgrading proxies that have base monads other than 'IO'.  For now, you will
+    have to rewrite the proxy if that happens.
 -}
 
 {- $backwards
