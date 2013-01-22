@@ -462,7 +462,7 @@ bracket_ morph before after p = do
     P.hoist morph $ tryIO before
     finally morph after p
 
-{-| Analogous to 'Ex.bracketOnAbort' from @Control.Exception@
+{-| Analogous to 'Ex.bracketOnError' from @Control.Exception@
 
     The first argument lifts 'bracketOnAbort' to work with any base monad.  Use
     'id' if your base monad is already 'SafeIO'.
