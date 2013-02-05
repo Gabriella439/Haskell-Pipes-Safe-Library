@@ -19,10 +19,10 @@ import qualified System.IO as IO
 -- | Safely allocate a 'IO.Handle' within a managed 'Proxy'
 withFile
  :: (Monad m, Proxy p)
- => (forall x . SafeIO x -> m x)
- -> FilePath
- -> IO.IOMode
- -> (IO.Handle -> ExceptionP p a' a b' b m r)
+ => (forall x . SafeIO x -> m x)               -- ^Monad morphism
+ -> FilePath                                   -- ^File
+ -> IO.IOMode                                  -- ^IO Mode
+ -> (IO.Handle -> ExceptionP p a' a b' b m r)  -- ^Continuation
  -> ExceptionP p a' a b' b m r
 withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
 
