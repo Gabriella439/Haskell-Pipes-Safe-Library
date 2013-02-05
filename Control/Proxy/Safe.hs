@@ -47,7 +47,7 @@ import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
 import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
-import Control.Proxy ((>->))
+import Control.Proxy ((->>), (>>~))
 import Control.Proxy.Trans.Identity
 import qualified Control.Proxy.Trans.Either as E
 import qualified Control.Proxy.Trans.Reader as R
@@ -202,11 +202,11 @@ trySaferIO m =
             hd )
 
 
-{- I don't export registerK/register only because people rarely want to guard
-   solely against premature termination.  Usually they also want to guard
-   against exceptions, too.
+{- I don't export 'register' only because people rarely want to guard solely
+   against premature termination.  Usually they also want to guard against
+   exceptions, too.
 
-    'registerK' should satisfy the following laws:
+    @registerK = (register .)@ should satisfy the following laws:
 
 * 'registerK' defines a functor from finalizers to functions:
 
@@ -225,20 +225,19 @@ trySaferIO m =
     'Arrow' instance for the Kleisli category.  However, I'm reasonably sure
     that when I do specify this interaction that the above laws will hold.
 
-    For now, just consider the above laws the contract for 'registerK' and
+    For now, just consider the above laws the contract for 'register' and
     consider any violations of the above laws as bugs.
 -}
-registerK
+register
  :: (Monad m, P.Proxy p)
  => (forall x . SafeIO x -> m x)
  -> IO ()
- -> (b' -> p a' a b' b m r)
- -> (b' -> p a' a b' b m r)
-registerK morph h k =
-    P.runIdentityK (P.hoistK morph up) >-> k >-> P.runIdentityK (P.hoistK morph dn)
+ -> p a' a b' b m r
+ -> p a' a b' b m r
+register morph h k =
+    (P.runIdentityK (P.hoistK morph up) ->> k) >>~ P.runIdentityK (P.hoistK morph dn)
   where
-    dn b'0 = do
-        b0 <- P.request b'0
+    dn b0 = do
         huRef <- lift $ SafeIO $ asks downstream
         let dn' b = do
                 hu <- lift $ SafeIO $ lift $ do
@@ -262,16 +261,6 @@ registerK morph h k =
                 a'2 <- P.respond a
                 up' a'2
         up' a'0
-
-register
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x)
- -> IO ()
- -> p a' a b' b m r
- -> p a' a b' b m r
-register morph h p = registerK morph h (\_ -> p) undefined
-{- This is safe and there is a way that does not use 'undefined' if I slightly
-   restructure the Proxy type class, but this will work for now. -}
 
 {- $check
     The following @try@ functions are the only way to convert 'IO' actions to
@@ -525,7 +514,7 @@ bracketOnAbort morph before after p = do
 
 > falseSenseOfSecurity () = do
 >     x <- request ()
->     unsafeCloseU
+>     unsafeCloseU ()
 >     forever $ respond x
 
     However, this is not safe, as the following counter-example demonstrates:
