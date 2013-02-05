@@ -41,5 +41,7 @@ Library
         pipes >= 3.2.0 && < 3.3
     Exposed-Modules:
         Control.Proxy.Safe,
+        Control.Proxy.Safe.Core,
+        Control.Proxy.Safe.Prelude,
         Control.Proxy.Safe.Tutorial
     Default-Language: Haskell98
