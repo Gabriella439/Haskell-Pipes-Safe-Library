@@ -179,7 +179,7 @@ import System.IO (withFile)
 >  -> ExceptionP p a' a b' b m r
 
     These let you embed native exception handling into proxies.  For example,
-    we could exception handling to recover from a file opening error:
+    we could use exception handling to recover from a file opening error:
 
 > import Prelude hiding (catch) -- if using base <= 4.5
 >
@@ -187,7 +187,7 @@ import System.IO (withFile)
 > openFileS () = (do
 >     tryIO $ putStrLn "Select a file:"
 >     file <- tryIO getLine
->     readFileS file ())
+>     readFileS file () )
 >   `catch` (\e -> do
 >       tryIO $ print (e :: IOException)
 >       openFileS () )
@@ -253,7 +253,7 @@ st.txt
 >     forkIO $ do
 >         threadDelay 1000
 >         killThread tID
->     runSafeIO $ runProxy $ runEitherK $
+>     trySafeIO $ runProxy $ runEitherK $
 >         foreverK (readFileS "test.txt") >-> tryK printD
 
 >>> main
@@ -325,21 +325,24 @@ Look busy
 {- $trytransformer
     Not all proxy transformers implement 'try'.  You can look at the instance
     list for 'CheckP' and you will see that it mainly covers the base
-    proxy implementations:
+    proxy implementations and trivial proxy transformers:
 
 > instance CheckP ProxyFast
 > instance CheckP ProxyCorrect
 > instance (CheckP p) => CheckP (IdentityP p)
 > instance (CheckP p) => CheckP (ReaderP   p)
 
-    However, you actually can upgrade more sophisticated proxy transformer
-    stacks.  I've relaxed the type signature of the 'PFunctor' type class to
-    accept proxy morphisms that change the base monad, so now it accepts 'try'
-    as a valid argument.  This means that you can use 'hoistP' as many times as
-    necessary to target 'try' to the base proxy:
+    This means that we can usually only 'try' the base proxy.  However, this is
+    not a problem because we can just 'hoistP' 'try' over the outer proxy
+    transformers to target it to the base proxy.
+
+    For example, if we have a 'Proxy' with two proxy transformer layers:
 
 > p :: (CheckP p) => Producer (StateP s (MaybeP p)) IO r
->
+
+    ... we just 'hoistP' the 'try' over the two outer layers to target it to the
+    base 'Proxy':
+
 > hoistP (hoistP try) p
 >   :: (CheckP p) => Producer (StateP s (MaybeP (ExceptionP p))) SafeIO r
 
@@ -368,7 +371,7 @@ Look busy
     delays the asynchronous exception until the next 'IO' action.
 
     There is one upgrade scenario that this library does not yet cover, which is
-    upgrading proxies that have base monads other than 'IO'.  For now, you will
+    'try'ing proxies that have base monads other than 'IO'.  For now, you will
     have to rewrite the proxy if that happens.
 -}
 
@@ -426,8 +429,8 @@ Look busy
     demand and trust that they finalize safely upon termination:
 
 > files () = do
->     readFileS "file1.txt" () -- 3 lines long
->     readFileS "file2.txt" () -- 4 lines long
+>     readFileS "file1.txt" ()  -- 3 lines long
+>     readFileS "file2.txt" ()  -- 4 lines long
 > -- or: files = readFileS "file1.txt" >=> readFileS "file2.txt"
 
 >>> runSafeIO $ runProxy $ runEitherK $ files >-> takeB_ 2 >-> printD
