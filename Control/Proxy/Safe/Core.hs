@@ -46,7 +46,6 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
 import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
-import qualified Control.Proxy.Core.Faster as PFR
 import qualified Control.Proxy.Core.Correct as PC
 import Control.Proxy ((->>), (>>~))
 import Control.Proxy.Trans.Identity
@@ -319,18 +318,6 @@ instance CheckP PF.ProxyFast where
                     Left exc -> return (PF.Pure (Left exc))
                     Right p' -> return (go p') )))
             PF.Pure r -> PF.Pure (Right r)
-
-instance CheckP PFR.ProxyFaster where
-    try p0 = EitherP (go p0) where
-        go p = case p of
-            PFR.Request a' fa  -> PFR.Request a' (\a  -> go (fa  a ))
-            PFR.Respond b  fb' -> PFR.Respond b  (\b' -> go (fb' b'))
-            PFR.M m -> PFR.M (SafeIO (ReaderT (\s -> do
-                e <- Ex.try (restore s m)
-                case e of
-                    Left exc -> return (PFR.Pure (Left exc))
-                    Right p' -> return (go p') )))
-            PFR.Pure r -> PFR.Pure (Right r)
 
 instance CheckP PC.ProxyCorrect where
     try p0 = EitherP (go p0) where

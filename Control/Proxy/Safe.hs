@@ -3,6 +3,7 @@
     This module exports the entire library for convenience:
 
     * "Control.Proxy.Safe.Core": All safety primitives
+
     * "Control.Proxy.Safe.Prelude": Prelude of managed proxies
 -}
 
