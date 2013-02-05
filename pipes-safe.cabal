@@ -4,17 +4,17 @@ Cabal-Version: >=1.14.0
 Build-Type: Simple
 License: BSD3
 License-File: LICENSE
-Copyright: 2012 Gabriel Gonzalez
+Copyright: 2013 Gabriel Gonzalez
 Author: Gabriel Gonzalez
 Maintainer: Gabriel439@gmail.com
 Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
 Synopsis: Safety for the pipes ecosystem
 Description:
-    This package adds resource management to the @pipes@ ecosystem.  Notable
-    features include:
+    This package adds resource management and exception handling to the @pipes@
+    ecosystem.  Notable features include:
     .
-    * /Resource management/: Guarantee finalization using @finally@, @bracket@
-      and more
+    * /Resource Safety/: Guarantee finalization using @finally@, @bracket@ and
+      more
     .
     * /Laziness/: Only acquire resources when you need them
     .

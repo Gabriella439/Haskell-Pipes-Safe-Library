@@ -181,6 +181,8 @@ import System.IO (withFile)
     These let you embed native exception handling into proxies.  For example,
     we could exception handling to recover from a file opening error:
 
+> import Prelude hiding (catch) -- if using base <= 4.5
+>
 > openFileS :: (CheckP p) => () -> Producer (ExceptionP p) String SafeIO ()
 > openFileS () = (do
 >     tryIO $ putStrLn "Select a file:"
