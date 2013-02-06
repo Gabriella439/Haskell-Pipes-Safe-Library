@@ -11,6 +11,7 @@ module Control.Proxy.Safe (
     throw,
     catch,
     handle,
+    exTry,
 
     -- * Safe IO
     SafeIO,
@@ -99,6 +100,13 @@ handle
  -> ExceptionP p a' a b' b m r         -- ^ Original computation
  -> ExceptionP p a' a b' b m r
 handle = flip catch
+
+-- | Analogous to 'Control.Exception.try' from @Control.Exception@
+exTry
+ :: (Ex.Exception e, Monad m, P.Proxy p)
+ => EitherP SomeException p a' a b' b m r  -- ^ Original computation
+ -> ExceptionP p a' a b' b m (Either e r)
+exTry m = catch (m >>= return . Right) (return . Left)
 
 data Status = Status {
     restore    :: forall a . IO a -> IO a,
@@ -211,7 +219,7 @@ trySaferIO m =
 * 'registerK' defines a functor from finalizers to functions:
 
 > registerK morph m1 . registerK morph m2 = registerK morph (m2 >> m1)
-> 
+>
 > registerK morph (return ()) = id
 
 * 'registerK' is a functor between Kleisli categories:
@@ -300,7 +308,7 @@ register morph h p = registerK morph h (\_ -> p) undefined
 > tryK idT = idT
 
 > tryK f >~> tryK g = tryK (f >~> g)
-> 
+>
 > tryK coidT = coidT
 
     Functor between \"request\" categories:
