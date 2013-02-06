@@ -12,6 +12,7 @@ module Control.Proxy.Safe (
     catch,
     handle,
     exTry,
+    exTryJust,
 
     -- * Safe IO
     SafeIO,
@@ -107,6 +108,17 @@ exTry
  => EitherP SomeException p a' a b' b m r  -- ^ Original computation
  -> ExceptionP p a' a b' b m (Either e r)
 exTry m = catch (m >>= return . Right) (return . Left)
+
+-- | Analogous to 'Control.Exception.tryJust' from @Control.Exception@
+exTryJust
+ :: (Ex.Exception e, Monad m, P.Proxy p)
+ => (e -> Maybe re)                        -- ^ Predicate on exceptions
+ -> EitherP SomeException p a' a b' b m r  -- ^ Original computation
+ -> ExceptionP p a' a b' b m (Either re r)
+exTryJust p m = catch (m >>= return . Right) $ \ex -> do
+                  case p ex of
+                    Nothing -> throw ex
+                    Just re -> return (Left re)
 
 data Status = Status {
     restore    :: forall a . IO a -> IO a,
