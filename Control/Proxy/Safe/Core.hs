@@ -11,6 +11,7 @@ module Control.Proxy.Safe.Core (
     throw,
     catch,
     handle,
+    note,
 
     -- * Safe IO
     SafeIO,
@@ -48,7 +49,7 @@ import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
 import Control.Proxy ((->>), (>>~))
-import Control.Proxy.Trans.Identity
+import Control.Proxy.Trans.Maybe (MaybeP(runMaybeP))
 import qualified Control.Proxy.Trans.Either as E
 import qualified Control.Proxy.Trans.Reader as R
 import Control.Proxy.Trans.Either hiding (throw, catch, handle)
@@ -57,6 +58,7 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 #else
 import Prelude hiding (catch)
 #endif
+import System.IO.Error (userError)
 
 {- $exceptionp
     This library checks and stores all exceptions using the 'EitherP' proxy
@@ -99,6 +101,16 @@ handle
  -> ExceptionP p a' a b' b m r         -- ^ Original computation
  -> ExceptionP p a' a b' b m r
 handle = flip catch
+
+{-| Convert a 'MaybeP' to an 'ExceptionP' by providing a 'String'-based user
+    error
+-}
+note
+ :: (Monad m, P.Proxy p)
+ => String -> MaybeP p a' a b' b m r -> ExceptionP p a' a b' b m r
+note str p = EitherP (P.runIdentityP (fmap (\m -> case m of
+    Nothing -> Left (Ex.toException (userError str))
+    Just r  -> Right r ) (P.IdentityP (runMaybeP p)) ))
 
 data Status = Status {
     restore    :: forall a . IO a -> IO a,
@@ -332,8 +344,8 @@ instance CheckP PC.ProxyCorrect where
                         return (PC.Respond b  (\b' -> go (fb' b')))
                     PC.Pure r -> return (PC.Pure (Right r)) )))
 
-instance (CheckP p) => CheckP (IdentityP p) where
-    try = EitherP . IdentityP . runEitherP . try . runIdentityP
+instance (CheckP p) => CheckP (P.IdentityP p) where
+    try = EitherP . P.IdentityP . runEitherP . try . P.runIdentityP
 
 instance (CheckP p) => CheckP (R.ReaderP i p) where
     try p = EitherP $ R.ReaderP $ \i -> runEitherP $ try (R.unReaderP p i)
