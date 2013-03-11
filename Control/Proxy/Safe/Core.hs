@@ -266,7 +266,7 @@ register morph h k =
         let up' a' = do
                 hd  <- lift $ SafeIO $ lift $ do
                     hd <- readIORef hdRef
-                    writeIORef hdRef (h >> hd)
+                    writeIORef hdRef (hd >> h)
                     return hd
                 a   <- P.request a'
                 lift $ SafeIO $ lift $ writeIORef hdRef hd
