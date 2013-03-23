@@ -61,7 +61,7 @@ import System.IO.Error (userError)
 
 {- $exceptionp
     This library checks and stores all exceptions using the 'EitherP' proxy
-    transformer.  The following type synonym simplifies type signatures.
+    transformer.  The 'ExceptionP' type synonym simplifies type signatures.
 
     Use 'runEitherP' / 'runEitherK' from the re-exported
     @Control.Proxy.Trans.Either@ to convert 'ExceptionP' back to the base
@@ -72,7 +72,8 @@ import System.IO.Error (userError)
     API from @Control.Exception@.  If you want the old versions you will need to
     import them qualified.
 
-    This module only re-exports 'SomeException' from @Control.Exception@.
+    This module only re-exports 'SomeException' and 'Exception' from
+    @Control.Exception@.
 -}
 
 -- | A proxy transformer that stores exceptions using 'EitherP'
@@ -84,10 +85,10 @@ throw = E.throw . Ex.toException
 
 -- | Analogous to 'Ex.catch' from @Control.Exception@
 catch
- :: (Ex.Exception e, Monad m, P.Proxy p)
- => ExceptionP p a' a b' b m r         -- ^ Original computation
- -> (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
- -> ExceptionP p a' a b' b m r
+    :: (Ex.Exception e, Monad m, P.Proxy p)
+    => ExceptionP p a' a b' b m r         -- ^ Original computation
+    -> (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
+    -> ExceptionP p a' a b' b m r
 catch p f = p `E.catch` (\someExc ->
     case Ex.fromException someExc of
         Nothing -> E.throw someExc
@@ -230,11 +231,11 @@ trySaferIO m =
     consider any violations of the above laws as bugs.
 -}
 register
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x)
- -> IO ()
- -> p a' a b' b m r
- -> p a' a b' b m r
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x)
+    -> IO ()
+    -> p a' a b' b m r
+    -> p a' a b' b m r
 register morph h k =
     (P.runIdentityK (P.hoistK morph up) ->> k) >>~ P.runIdentityK (P.hoistK morph dn)
   where
@@ -269,41 +270,17 @@ register morph h k =
     exceptions, and store them in the 'ExceptionP' proxy transformer.
 -}
 
-{-| You can retroactively check all exceptions for proxies that implement
+{-| Use 'try' to retroactively check all exceptions for proxies that implement
     'CheckP'.
 
-    'try' is /almost/ a proxy morphism, which means that @tryK = (try .)@
-    defines a functor that preserves five categories.  I say \"almost\" because
-    it unmasks asynchronous exceptions for 'return'.  However, this does not
-    affect the exception safety of this implementation.
+    'try' is /almost/ a proxy morphism (See @Control.Proxy.Morph@ from @pipes@
+    for the full list of laws).  The only exception is the following law:
 
-    Functor between \'@K@\'leisli categories:
+> try (return x) = return x
 
-> tryK f >=> tryK g = tryK (f >=> g)
->
-> tryK return = return  -- Not true for asynchronous exceptions
-
-    Functor between 'P.Proxy' categories:
-
-> tryK f >-> tryK g = tryK (f >-> g)
->
-> tryK idT = idT
-
-> tryK f >~> tryK g = tryK (f >~> g)
-> 
-> tryK coidT = coidT
-
-    Functor between \"request\" categories:
-
-> tryK f \>\ tryK g = tryK (f \>\ g)
->
-> tryK request = request
-
-    Functor between \"respond\" categories:
-
-> tryK f />/ tryK g = tryK (f />/ g)
->
-> tryK respond = respond
+    The left-hand side unmasks asynchronous exceptions and checks them
+    immediately, whereas the right-hand side delays asynchronous exceptions
+    until the next 'try' or 'tryIO' block.
 -}
 class (P.Proxy p) => CheckP p where
     try :: p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r
@@ -341,8 +318,8 @@ instance (CheckP p) => CheckP (R.ReaderP i p) where
 
 -- | Check all exceptions for a 'P.Proxy' \'@K@\'leisli arrow
 tryK
- :: (CheckP p)
- => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
+    :: (CheckP p)
+    => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
 tryK = (try .)
 
 {-| Check all exceptions for an 'IO' action
@@ -377,11 +354,11 @@ tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
 > onAbort morph (return ()) = id
 -}
 onAbort
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
- -> IO r'                         -- ^ Action to run on abort
- -> ExceptionP p a' a b' b m r    -- ^ Guarded computation
- -> ExceptionP p a' a b' b m r
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
+    -> IO r'                         -- ^ Action to run on abort
+    -> ExceptionP p a' a b' b m r    -- ^ Guarded computation
+    -> ExceptionP p a' a b' b m r
 onAbort morph after p =
     register morph (after >> return ()) p
         `E.catch` (\e -> do
@@ -399,11 +376,11 @@ onAbort morph after p =
 >     return r
 -}
 finally
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x) -- ^ Monad morphism
- -> IO r'                        -- ^ Guaranteed final action
- -> ExceptionP p a' a b' b m r   -- ^ Guarded computation
- -> ExceptionP p a' a b' b m r
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x) -- ^ Monad morphism
+    -> IO r'                        -- ^ Guaranteed final action
+    -> ExceptionP p a' a b' b m r   -- ^ Guarded computation
+    -> ExceptionP p a' a b' b m r
 finally morph after p = do
     r <- onAbort morph after p
     P.hoist morph $ tryIO after
@@ -422,12 +399,12 @@ finally morph after p = do
 >     finally morph (after h) (p h)
 -}
 bracket
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
- -> IO h                               -- ^ Acquire resource
- -> (h -> IO r')                       -- ^ Release resource
- -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
- -> ExceptionP p a' a b' b m r
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
+    -> IO h                               -- ^ Acquire resource
+    -> (h -> IO r')                       -- ^ Release resource
+    -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
+    -> ExceptionP p a' a b' b m r
 bracket morph before after p = do
     h <- P.hoist morph $ tryIO before
     finally morph (after h) (p h)
@@ -442,12 +419,12 @@ bracket morph before after p = do
 >     finally morph after p
 -}
 bracket_
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
- -> IO r1                         -- ^ Acquire resource
- -> IO r2                         -- ^ Release resource
- -> ExceptionP p a' a b' b m r    -- ^ Use resource
- -> ExceptionP p a' a b' b m r
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
+    -> IO r1                         -- ^ Acquire resource
+    -> IO r2                         -- ^ Release resource
+    -> ExceptionP p a' a b' b m r    -- ^ Use resource
+    -> ExceptionP p a' a b' b m r
 bracket_ morph before after p = do
     P.hoist morph $ tryIO before
     finally morph after p
@@ -462,12 +439,12 @@ bracket_ morph before after p = do
 >     onAbort morph (after h) (p h)
 -}
 bracketOnAbort
- :: (Monad m, P.Proxy p)
- => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
- -> IO h                               -- ^ Acquire resource
- -> (h -> IO r')                       -- ^ Release resource
- -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
- -> ExceptionP p a' a b' b m r
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
+    -> IO h                               -- ^ Acquire resource
+    -> (h -> IO r')                       -- ^ Release resource
+    -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
+    -> ExceptionP p a' a b' b m r
 bracketOnAbort morph before after p = do
     h <- P.hoist morph $ tryIO before
     onAbort morph (after h) (p h)
@@ -533,7 +510,8 @@ bracketOnAbort morph before after p = do
 -}
 
 {-| 'unsafeCloseU' calls all finalizers registered upstream of the current
-    'P.Proxy'. -}
+    'P.Proxy'.
+-}
 unsafeCloseU :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
 unsafeCloseU r = do
     (huRef, hu) <- lift $ SafeIO $ do
@@ -545,7 +523,8 @@ unsafeCloseU r = do
     return r
 
 {-| 'unsafeCloseD' calls all finalizers registered downstream of the current
-    'P.Proxy'. -}
+    'P.Proxy'.
+-}
 unsafeCloseD :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
 unsafeCloseD r = do
     (hdRef, hd) <- lift $ SafeIO $ do

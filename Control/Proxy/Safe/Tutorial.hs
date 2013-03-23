@@ -54,7 +54,7 @@ import System.IO (withFile)
 > import System.IO
 > 
 > readFileS
->  :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
+>     :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
 > readFileS file () = bracket id
 >     (do h <- openFile file ReadMode
 >         putStrLn $ "{File Open}"
@@ -91,8 +91,8 @@ import System.IO (withFile)
     proxy to a \"managed\" proxy:
 
 > tryK
->  :: CheckP p
->  => (q -> p a' a b' b IO r) -> q -> ExceptionP p a' a b' b SafeIO r 
+>     :: (CheckP p)
+>     => (q -> p a' a b' b IO r) -> q -> ExceptionP p a' a b' b SafeIO r 
 >
 > tryK printer :: (CheckP p, Show a) => () -> Consumer (Exception p) a SafeIO r
 >
@@ -173,10 +173,10 @@ import System.IO (withFile)
 > throw :: (Monad m, Proxy p, Exception e) => e -> ExceptionP p a' a b' b m r
 >
 > catch
->  :: (Monad m, Proxy p, Exception e)
->  => ExceptionP p a' a b' b m r
->  -> (e -> ExceptionP p a' a b' b m r)
->  -> ExceptionP p a' a b' b m r
+>     :: (Monad m, Proxy p, Exception e)
+>     => ExceptionP p a' a b' b m r
+>     -> (e -> ExceptionP p a' a b' b m r)
+>     -> ExceptionP p a' a b' b m r
 
     These let you embed native exception handling into proxies.  For example,
     we could use exception handling to recover from a file opening error:
@@ -208,8 +208,8 @@ test.txt
     You can even catch and resume from asynchronous exceptions:
 
 > heartbeat
->   :: Proxy p
->   => ExceptionP p a' a b' b SafeIO r -> ExceptionP p a' a b' b SafeIO r
+>      :: Proxy p
+>      => ExceptionP p a' a b' b SafeIO r -> ExceptionP p a' a b' b SafeIO r
 > heartbeat p = p `catch` (\e -> do
 >            let _ = e :: SomeException
 >            tryIO $ putStrLn "<Nice try!>"
@@ -344,12 +344,12 @@ Look busy
     base 'Proxy':
 
 > hoistP (hoistP try) p
->   :: (CheckP p) => Producer (StateP s (MaybeP (ExceptionP p))) SafeIO r
+>     :: (CheckP p) => Producer (StateP s (MaybeP (ExceptionP p))) SafeIO r
 
     'hoistP' expects a proxy morphism for its argument, but is 'try' a proxy
-    morphism?  Yes!  'try' satisfies the proxy morphism laws, which are the same
-    as the proxy transformer laws.  The documentation for 'try' lists the full
-    set of equations, but the ones you should remember are:
+    morphism?  Yes!  'try' satisfies the proxy morphism laws and the
+    documentation in the @Control.Proxy.Morph@ module (from the @pipes@ package)
+    lists the full set of laws.  The important laws you should remember are:
 
 > tryK (f >-> g) = tryK f >-> tryK g
 
@@ -368,7 +368,7 @@ Look busy
     asynchronous exception, but the right-hand side will not.  This does not
     compromise the safety of this library.  At worst, it will just overzealously
     mask pure segments of code if you don't wrap them in 'try', which just
-    delays the asynchronous exception until the next 'IO' action.
+    delays the asynchronous exception until the next 'try' or 'tryIO' block.
 
     There is one upgrade scenario that this library does not yet cover, which is
     'try'ing proxies that have base monads other than 'IO'.  For now, you will
@@ -402,10 +402,10 @@ Look busy
     handle management:
 
 > withFileS
->  :: (Proxy p)
->  => FilePath
->  -> (Handle -> b' -> ExceptionP p a' a b' b SafeIO r)
->  -> b' -> ExceptionP p a' a b' b SafeIO r
+>     :: (Proxy p)
+>     => FilePath
+>     -> (Handle -> b' -> ExceptionP p a' a b' b SafeIO r)
+>     -> b' -> ExceptionP p a' a b' b SafeIO r
 > withFileS file p b' = bracket id
 >     (do h <- openFile file ReadMode
 >         putStrLn "{File Open}"

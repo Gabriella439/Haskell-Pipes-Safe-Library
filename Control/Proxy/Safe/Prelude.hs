@@ -1,4 +1,4 @@
--- | Prelude of proxies that use resource management features
+-- | Prelude of proxies providing simple resource management features
 
 {-# LANGUAGE Rank2Types #-}
 
@@ -18,12 +18,12 @@ import qualified System.IO as IO
 
 -- | Safely allocate a 'IO.Handle' within a managed 'Proxy'
 withFile
- :: (Monad m, Proxy p)
- => (forall x . SafeIO x -> m x)               -- ^Monad morphism
- -> FilePath                                   -- ^File
- -> IO.IOMode                                  -- ^IO Mode
- -> (IO.Handle -> ExceptionP p a' a b' b m r)  -- ^Continuation
- -> ExceptionP p a' a b' b m r
+    :: (Monad m, Proxy p)
+    => (forall x . SafeIO x -> m x)               -- ^Monad morphism
+    -> FilePath                                   -- ^File
+    -> IO.IOMode                                  -- ^IO Mode
+    -> (IO.Handle -> ExceptionP p a' a b' b m r)  -- ^Continuation
+    -> ExceptionP p a' a b' b m r
 withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
 
 {- $string
@@ -33,9 +33,10 @@ withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
     dependencies.
 -}
 {-| Read from a file, lazily opening the 'IO.Handle' and automatically closing
-    it afterwards -}
+    it afterwards
+-}
 readFileS
- :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
+    :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
 readFileS file () = withFile id file IO.ReadMode $ \handle -> do
     let go = do
             eof <- tryIO $ IO.hIsEOF handle
@@ -48,9 +49,10 @@ readFileS file () = withFile id file IO.ReadMode $ \handle -> do
     go
 
 {-| Write to a file, lazily opening the 'IO.Handle' and automatically closing it
-    afterwards -}
+    afterwards
+-}
 writeFileD
- :: (Proxy p) => FilePath -> x -> ExceptionP p x String x String SafeIO r
+    :: (Proxy p) => FilePath -> x -> ExceptionP p x String x String SafeIO r
 writeFileD file x0 = do
     withFile id file IO.WriteMode $ \handle -> do
         let go x = do
