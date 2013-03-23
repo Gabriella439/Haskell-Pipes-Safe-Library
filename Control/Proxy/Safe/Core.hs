@@ -95,21 +95,11 @@ catch p f = p `E.catch` (\someExc ->
 
 -- | Analogous to 'Ex.handle' from @Control.Exception@
 handle
- :: (Ex.Exception e, Monad m, P.Proxy p)
- => (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
- -> ExceptionP p a' a b' b m r         -- ^ Original computation
- -> ExceptionP p a' a b' b m r
+    :: (Ex.Exception e, Monad m, P.Proxy p)
+    => (e -> ExceptionP p a' a b' b m r)  -- ^ Handler
+    -> ExceptionP p a' a b' b m r         -- ^ Original computation
+    -> ExceptionP p a' a b' b m r
 handle = flip catch
-
-{-| Convert a 'MaybeP' to an 'ExceptionP' by providing a 'String'-based user
-    error
--}
-note
- :: (Monad m, P.Proxy p)
- => String -> MaybeP p a' a b' b m r -> ExceptionP p a' a b' b m r
-note str p = EitherP (P.runIdentityP (fmap (\m -> case m of
-    Nothing -> Left (Ex.toException (userError str))
-    Just r  -> Right r ) (P.IdentityP (runMaybeP p)) ))
 
 data Status = Status {
     restore    :: forall a . IO a -> IO a,
