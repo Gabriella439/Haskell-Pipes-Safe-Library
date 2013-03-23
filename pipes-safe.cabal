@@ -1,6 +1,6 @@
 Name: pipes-safe
 Version: 1.1.0
-Cabal-Version: >=1.14.0
+Cabal-Version: >=1.8.0.2
 Build-Type: Simple
 License: BSD3
 License-File: LICENSE
@@ -43,4 +43,4 @@ Library
         Control.Proxy.Safe.Core,
         Control.Proxy.Safe.Prelude,
         Control.Proxy.Safe.Tutorial
-    Default-Language: Haskell98
+    GHC-Options: -O2
