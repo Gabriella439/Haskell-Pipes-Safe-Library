@@ -6,12 +6,11 @@ module Control.Proxy.Safe.Core (
     -- * Exception Handling
     -- $exceptionp
     module Control.Proxy.Trans.Either,
-    module Exception,
+    module Control.Exception,
     ExceptionP,
     throw,
     catch,
     handle,
-    note,
 
     -- * Safe IO
     SafeIO,
@@ -41,7 +40,7 @@ module Control.Proxy.Safe.Core (
     ) where
 
 import qualified Control.Exception as Ex
-import Control.Exception as Exception (SomeException, Exception)
+import Control.Exception (SomeException, Exception)
 import Control.Applicative (Applicative(pure, (<*>)))
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
