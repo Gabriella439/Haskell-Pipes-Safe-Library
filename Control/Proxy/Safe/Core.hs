@@ -324,9 +324,12 @@ tryK = (try .)
 
 {-| Check all exceptions for an 'IO' action
 
-> (tryIO .) f >=> (tryIO .) g = (tryIO .) (f >=> g)
+    'tryIO' is a monad morphism:
+
+> tryIO $ do x <- m  =  do x <- tryIO m
+>            f x           tryIO (f x)
 >
-> (tryIO .) return = return  -- Not true for asynchronous exceptions
+> tryIO (return x) = return x  -- Not true for asynchronous exceptions
 -}
 tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
@@ -342,12 +345,14 @@ tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
     The first argument lifts 'onAbort' to work with other base monads.  Use
     'id' if your base monad is already 'SafeIO'.
 
-> do x <- onAbort morph fin m
->    onAbort morph fin (f x)
-> = onAbort morph fin $ do x <- m
->                          f x
+    @(onAbort morph fin)@ is a monad morphism:
+
+> onAbort morph fin $ do x <- m  =  do x <- onAbort morph fin m
+>                        f x           onAbort morph fin (f x)
 >
 > onAbort morph fin (return x) = return x
+
+    'onAbort' ensures finalizers are called from inside to out:
 
 > onAbort morph fin1 . onAbort morph fin2 = onAbort morph (fin2 >> fin1)
 >
