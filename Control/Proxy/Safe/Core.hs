@@ -23,6 +23,7 @@ module Control.Proxy.Safe.Core (
     -- $check
     CheckP(..),
     tryK,
+    check,
     tryIO,
 
     -- * Finalization
@@ -203,7 +204,6 @@ trySaferIO m =
             hd <- readIORef hdRef
             hd )
 
-
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
    exceptions, too.
@@ -321,6 +321,12 @@ tryK
     :: (CheckP p)
     => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
 tryK = (try .)
+
+-- | Check all exceptions, embedding them within an existing 'Exception' layer
+check
+    :: (CheckP p)
+    => ExceptionP p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r
+check = P.embedP try
 
 {-| Check all exceptions for an 'IO' action
 
