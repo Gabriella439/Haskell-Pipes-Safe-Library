@@ -322,7 +322,10 @@ tryK
     => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
 tryK = (try .)
 
--- | Check all exceptions, embedding them within an existing 'Exception' layer
+{-| Check all exceptions, embedding them within an existing 'Exception' layer
+
+    'check' is a proxy morphism, with the same caveat as 'try'.
+-}
 check
     :: (CheckP p)
     => ExceptionP p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r
@@ -330,12 +333,7 @@ check = P.embedP try
 
 {-| Check all exceptions for an 'IO' action
 
-    'tryIO' is a monad morphism:
-
-> tryIO $ do x <- m  =  do x <- tryIO m
->            f x           tryIO (f x)
->
-> tryIO (return x) = return x  -- Not true for asynchronous exceptions
+    'tryIO' is a monad morphism, with the same caveat as 'try'.
 -}
 tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
