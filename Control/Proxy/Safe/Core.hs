@@ -1,6 +1,6 @@
 -- | Exception handling and resource management integrated with proxies
 
-{-# LANGUAGE Rank2Types, CPP, KindSignatures #-}
+{-# LANGUAGE Rank2Types, CPP #-}
 
 module Control.Proxy.Safe.Core (
     -- * Exception Handling
@@ -48,10 +48,9 @@ import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
 import Control.Proxy ((->>), (>>~))
-import Control.Proxy.Trans.Maybe (MaybeP(runMaybeP))
 import qualified Control.Proxy.Trans.Either as E
-import qualified Control.Proxy.Trans.Reader as R
 import Control.Proxy.Trans.Either hiding (throw, catch, handle)
+import qualified Control.Proxy.Trans.Reader as R
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 #if MIN_VERSION_base(4,6,0)
 #else
@@ -64,8 +63,7 @@ import System.IO.Error (userError)
     transformer.  The 'ExceptionP' type synonym simplifies type signatures.
 
     Use 'runEitherP' / 'runEitherK' from the re-exported
-    @Control.Proxy.Trans.Either@ to convert 'ExceptionP' back to the base
-    monad
+    @Control.Proxy.Trans.Either@ to convert 'ExceptionP' back to the base monad.
 
     This module does not re-export 'E.throw', 'E.catch', and 'E.handle' from
     @Control.Proxy.Trans.Either@ and instead defines new versions similar to the
@@ -236,7 +234,9 @@ register
     -> p a' a b' b m r
     -> p a' a b' b m r
 register morph h k =
-    (P.runIdentityK (P.hoistK morph up) ->> k) >>~ P.runIdentityK (P.hoistK morph dn)
+    P.runIdentityP . P.hoist morph . up
+    ->> k
+    >>~ P.runIdentityP . P.hoist morph . dn
   where
     dn b0 = do
         huRef <- lift $ SafeIO $ asks downstream
