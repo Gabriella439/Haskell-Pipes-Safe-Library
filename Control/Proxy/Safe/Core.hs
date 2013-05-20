@@ -22,7 +22,6 @@ module Control.Proxy.Safe.Core (
     -- * Checked Exceptions
     -- $check
     CheckP(..),
-    tryK,
     tryIO,
 
     -- * Finalization
@@ -36,7 +35,11 @@ module Control.Proxy.Safe.Core (
     -- $prompt
     unsafeCloseU,
     unsafeCloseD,
-    unsafeClose
+    unsafeClose,
+
+    -- * Deprecated
+    -- $deprecated
+    tryK
     ) where
 
 import qualified Control.Exception as Ex
@@ -315,12 +318,6 @@ instance (CheckP p) => CheckP (P.IdentityP p) where
 instance (CheckP p) => CheckP (R.ReaderP i p) where
     try p = EitherP $ R.ReaderP $ \i -> runEitherP $ try (R.unReaderP p i)
 
--- | Check all exceptions for a 'P.Proxy' \'@K@\'leisli arrow
-tryK
-    :: (CheckP p)
-    => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
-tryK = (try .)
-
 {-| Check all exceptions for an 'IO' action
 
     'tryIO' is a monad morphism, with the same caveat as 'try'.
@@ -543,3 +540,13 @@ unsafeCloseD r = do
 -}
 unsafeClose :: (P.Proxy p) => r -> ExceptionP p a' a b' b SafeIO r
 unsafeClose = unsafeCloseU P.>=> unsafeCloseD
+
+{- $deprecated
+    To be removed in version @2.0.0@
+-}
+
+tryK
+    :: (CheckP p)
+    => (q -> p a' a b' b IO r) -> (q -> ExceptionP p a' a b' b SafeIO r)
+tryK = (try .)
+{-# DEPRECATED tryK "Use '(try .)' instead" #-}

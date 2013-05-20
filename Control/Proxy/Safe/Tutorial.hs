@@ -87,17 +87,15 @@ import System.IO (withFile)
 >     lift $ print a
 
     Do we need to rewrite it to use resource management abstractions?  Not at
-    all!  We can use 'try' / 'tryK' to automatically promote any \"unmanaged\"
-    proxy to a \"managed\" proxy:
+    all!  We can use 'try' to automatically promote any \"unmanaged\" proxy to a
+    \"managed\" proxy:
 
-> tryK
->     :: (CheckP p)
->     => (q -> p a' a b' b IO r) -> q -> ExceptionP p a' a b' b SafeIO r 
+> try :: (CheckP p) => p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r 
 >
-> tryK printer :: (CheckP p, Show a) => () -> Consumer (Exception p) a SafeIO r
+> try . printer :: (CheckP p, Show a) => () -> Consumer (Exception p) a SafeIO r
 >
 > session :: (CheckP p) => () -> Session (Exception p) SafeIO ()
-> session = readFileS "test.txt" >-> tryK printer
+> session = readFileS "test.txt" >-> try . printer
 
     The 'CheckP' constraint indicates that the base 'Proxy' type must be
     promotable using 'try'.
@@ -123,7 +121,7 @@ import System.IO (withFile)
     finalize the handle:
 
 > main = runSafeIO $ runProxy $ runEitherK $
->     readFileS "test.txt" >-> takeB_ 2 >-> tryK printD
+>     readFileS "test.txt" >-> takeB_ 2 >-> try . printD
 
 >>> main
 {File Open}
@@ -141,7 +139,7 @@ import System.IO (withFile)
 >         threadDelay 1000
 >         killThread tID
 >     runSafeIO $ runProxy $ runEitherK $
->         foreverK (readFileS "test.txt") >-> tryK printD
+>         foreverK (readFileS "test.txt") >-> try . printD
 
 >>> main
 ...
@@ -181,7 +179,7 @@ import System.IO (withFile)
     These let you embed native exception handling into proxies.  For example,
     we could use exception handling to recover from a file opening error:
 
-> import Prelude hiding (catch) -- if using base <= 4.5
+> import Prelude hiding (catch)  -- if using `base <= 4.5`
 >
 > openFileS :: (CheckP p) => () -> Producer (ExceptionP p) String SafeIO ()
 > openFileS () = (do
@@ -192,7 +190,7 @@ import System.IO (withFile)
 >       tryIO $ print (e :: IOException)
 >       openFileS () )
 
->>> runSafeIO $ runProxy $ runEitherK $ openFileS >-> tryK printD
+>>> runSafeIO $ runProxy $ runEitherK $ openFileS >-> try . printD
 Select a file:
 oops
 oops: openFile: does not exist (No such file or directory)
@@ -221,7 +219,7 @@ test.txt
 >         threadDelay 5000000  -- Every 5 seconds
 >         killThread tid
 >     trySafeIO $ runProxy $ runEitherK $
->         heartbeat . (openFileS >-> tryK printD)
+>         heartbeat . (openFileS >-> try . printD)
 
 >>> main
 Select a file:
@@ -254,7 +252,7 @@ st.txt
 >         threadDelay 1000
 >         killThread tID
 >     trySafeIO $ runProxy $ runEitherK $
->         foreverK (readFileS "test.txt") >-> tryK printD
+>         foreverK (readFileS "test.txt") >-> try . printD
 
 >>> main
 ...
@@ -283,7 +281,7 @@ Left thread killed
     For example, consider the following 'Session':
 
 > session () = do
->    (readFileS "test.hs" >-> takeB_ 2 >-> tryK printD) ()
+>    (readFileS "test.hs" >-> takeB_ 2 >-> try . printD) ()
 >    tryIO $ putStrLn "Look busy"
 
 >>> runSafeIO $ runProxy $ runEitherK session
@@ -302,7 +300,7 @@ Look busy
     own hands and manually finalize things even more promptly:
 
 > session () = do
->     (readFileS "test.hs" >-> (takeB_ 2 >=> unsafeClose) >-> tryK printD) ()
+>     (readFileS "test.hs" >-> (takeB_ 2 >=> unsafeClose) >-> try . printD) ()
 >     tryIO $ putStrLn "Look busy"
 
 >>> runSafeIO $ runProxy $ runEitherK session
@@ -351,7 +349,7 @@ Look busy
     documentation in the @Control.Proxy.Morph@ module (from the @pipes@ package)
     lists the full set of laws.  The important laws you should remember are:
 
-> tryK (f >-> g) = tryK f >-> tryK g
+> try . (f >-> g) = try . f >-> try . g
 
 > try (request a') = request a'
 
@@ -414,9 +412,10 @@ Look busy
 >               hClose h )
 >     (\h -> p h b')
 
-    ... and now we can 'readFileS' in terms of 'withFileS' and 'hGetLineS':
+    ... and now we can define 'readFileS' in terms of 'withFileS' and
+    'hGetLineS':
 
-> readFileS file = withFileS file (\h -> tryK (hGetLineS h))
+> readFileS file = withFileS file (\h -> try . (hGetLineS h))
 
     If 'hGetLineS' throws an error within its own code, 'withFileS' will still
     properly finalize the handle.  This works in spite of 'hGetLineS' never
