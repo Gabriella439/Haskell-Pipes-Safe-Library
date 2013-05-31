@@ -53,23 +53,16 @@ import Prelude hiding (catch)
 import System.IO.Error (userError)
 
 {- $exceptionp
-    This library checks and stores all exceptions using the 'EitherP' proxy
-    transformer.  The 'ExceptionP' type synonym simplifies type signatures.
-
-    Use 'runEitherP' / 'runEitherK' from the re-exported
-    @Control.Proxy.Trans.Either@ to convert 'ExceptionP' back to the base monad.
+    This module re-exports 'runEitherP' / 'runEitherK' from
+    @Control.Proxy.Trans.Either@ so that you can further unwrap the result of
+    'runSafeP'.
 
     This module does not re-export 'E.throw', 'E.catch', and 'E.handle' from
-    @Control.Proxy.Trans.Either@ and instead defines new versions similar to the
-    API from @Control.Exception@.  If you want the old versions you will need to
-    import them qualified.
+    @Control.Proxy.Trans.Either@, which would clash with the functions provided
+    here.
 
-    This module only re-exports 'SomeException' and 'Exception' from
-    @Control.Exception@.
+    @Control.Exception@ re-exports 'SomeException' and 'Exception'.
 -}
-
--- | A proxy transformer that stores exceptions using 'EitherP'
-type ExceptionP = EitherP SomeException
 
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
@@ -101,12 +94,9 @@ data Finalizers = Finalizers { upstream :: !(IO ()), downstream :: !(IO ()) }
 
 newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
 
-{-| 'SafeIO' masks asynchronous exceptions by default, and only unmasks them
-    during 'try' or 'tryIO' blocks in order to check all asynchronous
-    exceptions.
-
-    'SafeIO' also saves all finalizers dropped as a result of premature
-    termination and runs them when the 'P.Session' completes.
+{-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
+    during 'try' or 'tryIO' blocks.  This ensures that all exceptions are
+    checked.
 -}
 newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Mask IO r }
 
@@ -219,7 +209,7 @@ register h k = up ->> k >>~ dn
 {- $check
     The following @try@ functions are the only way to convert 'IO' actions to
     'SafeIO'.  These functions check all exceptions, including asynchronous
-    exceptions, and store them in the 'ExceptionP' proxy transformer.
+    exceptions, and store them in the 'SafeP' proxy transformer.
 -}
 
 {-| Use 'try' to retroactively check all exceptions for proxies that implement
