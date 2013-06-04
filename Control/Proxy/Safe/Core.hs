@@ -8,6 +8,7 @@ module Control.Proxy.Safe.Core (
     module Control.Proxy.Trans.Either,
     module Control.Exception,
     SafeP,
+    runSafeP,
     throw,
     catch,
     handle,
@@ -64,76 +65,7 @@ import System.IO.Error (userError)
     @Control.Exception@ re-exports 'SomeException' and 'Exception'.
 -}
 
--- | Analogous to 'Ex.throwIO' from @Control.Exception@
-throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
-throw e = SafeP (E.throw (Ex.toException e))
-{-# INLINABLE throw #-}
-
--- | Analogous to 'Ex.catch' from @Control.Exception@
-catch
-    :: (Ex.Exception e, Monad m, P.Proxy p)
-    => SafeP p a' a b' b m r         -- ^ Original computation
-    -> (e -> SafeP p a' a b' b m r)  -- ^ Handler
-    -> SafeP p a' a b' b m r
-catch p f = SafeP (unSafeP p `E.catch` (\someExc ->
-    case Ex.fromException someExc of
-        Nothing -> E.throw someExc
-        Just e  -> unSafeP (f e) ))
-{-# INLINABLE catch #-}
-
--- | Analogous to 'Ex.handle' from @Control.Exception@
-handle
-    :: (Ex.Exception e, Monad m, P.Proxy p)
-    => (e -> SafeP p a' a b' b m r)  -- ^ Handler
-    -> SafeP p a' a b' b m r         -- ^ Original computation
-    -> SafeP p a' a b' b m r
-handle = flip catch
-{-# INLINABLE handle #-}
-
 data Finalizers = Finalizers { upstream :: !(IO ()), downstream :: !(IO ()) }
-
-newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
-
-{-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
-    during 'try' or 'tryIO' blocks.  This ensures that all exceptions are
-    checked.
--}
-newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Mask IO r }
-
-instance Functor SafeIO where
-    fmap f m = SafeIO (fmap f (unSafeIO m))
-
-instance Applicative SafeIO where
-    pure r  = SafeIO (pure r)
-    f <*> x = SafeIO (unSafeIO f <*> unSafeIO x)
-
-instance Monad SafeIO where
-    return r = SafeIO (return r)
-    m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
-
-{-| Runs a 'SafeIO' computation in a masked background.
-
-    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
-    during 'try' or 'tryIO'.
-
-    'runSafeIO' is NOT a monad morphism.
--}
-runSafeIO :: SafeIO r -> IO r
-runSafeIO m = Ex.mask $ \unmask ->
-    runReaderT (unSafeIO m) (Mask unmask)
-{-# INLINABLE runSafeIO #-}
-
-{-| Runs a 'SafeIO' computation in an uninterruptible masked background.
-
-    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
-    unmasks them during 'try' or 'tryIO'.
-
-    'runSaferIO' is NOT a monad morphism.
--}
-runSaferIO :: SafeIO r -> IO r
-runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
-    runReaderT (unSafeIO m) (Mask unmask)
-{-# INLINABLE runSaferIO #-}
 
 -- | 'SafeP' stores all checked 'Exception's and all registered finalizers
 newtype SafeP p a' a b' b m r = SafeP
@@ -190,15 +122,14 @@ instance (P.Proxy p) => P.Proxy (SafeP p) where
 instance P.ProxyTrans SafeP where
     liftP p = SafeP (P.liftP (P.liftP p))
 
--- Deriving 'PFunctor'
 instance P.PFunctor SafeP where
     hoistP nat p = SafeP (P.hoistP (P.hoistP nat) (unSafeP p))
 
 runSafeP
     :: (Monad m, P.Proxy p)
     => (forall x . SafeIO x -> m x)
-    -> SafeP p a' a b' b m r -> p a' a b' b m (Either SomeException r)
-runSafeP morph p = P.runIdentityP $ do
+    -> SafeP p a' a b' b m r -> EitherP SomeException p a' a b' b m r
+runSafeP morph p = E.EitherP $ P.runIdentityP $ do
     let s0 = Finalizers (return ()) (return ())
     (e, _) <- P.IdentityP $ S.runStateP s0 $ E.runEitherP $ unSafeP $ do
         r <- p
@@ -208,6 +139,75 @@ runSafeP morph p = P.runIdentityP $ do
             downstream s1
         return r
     return e
+
+-- | Analogous to 'Ex.throwIO' from @Control.Exception@
+throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
+throw e = SafeP (E.throw (Ex.toException e))
+{-# INLINABLE throw #-}
+
+-- | Analogous to 'Ex.catch' from @Control.Exception@
+catch
+    :: (Ex.Exception e, Monad m, P.Proxy p)
+    => SafeP p a' a b' b m r         -- ^ Original computation
+    -> (e -> SafeP p a' a b' b m r)  -- ^ Handler
+    -> SafeP p a' a b' b m r
+catch p f = SafeP (unSafeP p `E.catch` (\someExc ->
+    case Ex.fromException someExc of
+        Nothing -> E.throw someExc
+        Just e  -> unSafeP (f e) ))
+{-# INLINABLE catch #-}
+
+-- | Analogous to 'Ex.handle' from @Control.Exception@
+handle
+    :: (Ex.Exception e, Monad m, P.Proxy p)
+    => (e -> SafeP p a' a b' b m r)  -- ^ Handler
+    -> SafeP p a' a b' b m r         -- ^ Original computation
+    -> SafeP p a' a b' b m r
+handle = flip catch
+{-# INLINABLE handle #-}
+
+newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
+
+{-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
+    during 'try' or 'tryIO' blocks.  This ensures that all exceptions are
+    checked.
+-}
+newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Mask IO r }
+
+instance Functor SafeIO where
+    fmap f m = SafeIO (fmap f (unSafeIO m))
+
+instance Applicative SafeIO where
+    pure r  = SafeIO (pure r)
+    f <*> x = SafeIO (unSafeIO f <*> unSafeIO x)
+
+instance Monad SafeIO where
+    return r = SafeIO (return r)
+    m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
+
+{-| Runs a 'SafeIO' computation in a masked background.
+
+    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
+    during 'try' or 'tryIO'.
+
+    'runSafeIO' is NOT a monad morphism.
+-}
+runSafeIO :: SafeIO r -> IO r
+runSafeIO m = Ex.mask $ \unmask ->
+    runReaderT (unSafeIO m) (Mask unmask)
+{-# INLINABLE runSafeIO #-}
+
+{-| Runs a 'SafeIO' computation in an uninterruptible masked background.
+
+    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
+    unmasks them during 'try' or 'tryIO'.
+
+    'runSaferIO' is NOT a monad morphism.
+-}
+runSaferIO :: SafeIO r -> IO r
+runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
+    runReaderT (unSafeIO m) (Mask unmask)
+{-# INLINABLE runSaferIO #-}
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
