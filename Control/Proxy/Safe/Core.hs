@@ -16,6 +16,7 @@ module Control.Proxy.Safe.Core (
     -- * Safe IO
     SafeIO,
     runSafeIO,
+    runSaferIO,
 
     -- * Checked Exceptions
     -- $check
@@ -125,11 +126,14 @@ instance P.ProxyTrans SafeP where
 instance P.PFunctor SafeP where
     hoistP nat p = SafeP (P.hoistP (P.hoistP nat) (unSafeP p))
 
+{-| Unwrap a self-contained 'SafeP' pipeline, running all dropped finalizers at
+    the end of the computation (ordering finalizers from upstream to downstream)
+-}
 runSafeP
     :: (Monad m, P.Proxy p)
     => (forall x . SafeIO x -> m x)
-    -> SafeP p a' a b' b m r -> EitherP SomeException p a' a b' b m r
-runSafeP morph p = E.EitherP $ P.runIdentityP $ do
+    -> SafeP p _a' () () _b m r -> EitherP SomeException p a' a b' b m r
+runSafeP morph p = E.EitherP $ P.runIdentityP $ up >\\ (do
     let s0 = Finalizers (return ()) (return ())
     (e, _) <- P.IdentityP $ S.runStateP s0 $ E.runEitherP $ unSafeP $ do
         r <- p
@@ -138,7 +142,10 @@ runSafeP morph p = E.EitherP $ P.runIdentityP $ do
             upstream   s1
             downstream s1
         return r
-    return e
+    return e ) //> dn
+  where
+    up _ = return ()
+    dn _ = return ()
 
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
