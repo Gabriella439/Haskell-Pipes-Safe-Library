@@ -1,7 +1,6 @@
 -- | Exception handling and resource management integrated with proxies
 
 {-# LANGUAGE Rank2Types, CPP #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Control.Proxy.Safe.Core (
     -- * Exception Handling
@@ -32,14 +31,15 @@ module Control.Proxy.Safe.Core (
 
 import qualified Control.Exception as Ex
 import Control.Exception (SomeException, Exception)
-import Control.Applicative (Applicative(pure, (<*>)))
-import Control.Monad.Morph (hoist)
-import Control.Monad.Trans.Class (lift)
+import Control.Applicative (Applicative(pure, (<*>)), Alternative(empty, (<|>)))
+import Control.Monad (MonadPlus(mzero, mplus))
+import Control.Monad.Morph (MFunctor(hoist))
+import Control.Monad.Trans.Class (MonadTrans(lift))
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
 import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
-import Control.Proxy ((->>), (>>~), (?>=))
+import Control.Proxy ((->>), (>>~), (>\\), (//>), (?>=))
 import qualified Control.Proxy.Trans.Either as E
 import Control.Proxy.Trans.Either hiding (throw, catch, handle)
 import qualified Control.Proxy.Trans.Maybe  as M
@@ -135,9 +135,64 @@ runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
     runReaderT (unSafeIO m) (Mask unmask)
 {-# INLINABLE runSaferIO #-}
 
-newtype SafeP p a' a b' b m r
-    = SafeP { unSafeP :: EitherP SomeException (S.StateP Finalizers p) a' a b' b m r }
-    deriving (Functor, Applicative, Monad, P.ProxyInternal, P.Proxy, P.MFunctor)
+-- | 'SafeP' stores all checked 'Exception's and all registered finalizers
+newtype SafeP p a' a b' b m r = SafeP
+    { unSafeP :: EitherP SomeException (S.StateP Finalizers p) a' a b' b m r }
+
+-- Deriving 'Functor'
+instance (Monad m, P.Proxy p) => Functor (SafeP p a' a b' b m) where
+    fmap f p = SafeP (fmap f (unSafeP p))
+
+-- Deriving 'Applicative'
+instance (Monad m, P.Proxy p) => Applicative (SafeP p a' a b' b m) where
+    pure r    = SafeP (pure r)
+    mf <*> mx = SafeP (unSafeP mf <*> unSafeP mx)
+
+-- Deriving 'Monad'
+instance (Monad m, P.Proxy p) => Monad (SafeP p a' a b' b m) where
+    return r = SafeP (return r)
+    m >>= f  = SafeP (unSafeP m >>= \r -> unSafeP (f r))
+
+-- Deriving 'MonadTrans'
+instance (P.Proxy p) => MonadTrans (SafeP p a' a b' b) where
+    lift = P.lift_P
+
+-- Deriving 'MFunctor'
+instance (P.Proxy p) => MFunctor (SafeP p a' a b' b) where
+    hoist = P.hoist_P
+
+-- Deriving 'ProxyInternal'
+instance (P.Proxy p) => P.ProxyInternal (SafeP p) where
+    return_P = \r -> SafeP (P.return_P r)
+    m ?>= f  = SafeP (unSafeP m ?>= \r -> unSafeP (f r))
+
+    lift_P m = SafeP (P.lift_P m)
+
+    hoist_P nat p = SafeP (P.hoist_P nat (unSafeP p))
+
+    liftIO_P m = SafeP (P.liftIO_P m)
+
+    thread_P p s = SafeP (P.thread_P (unSafeP p) s)
+
+-- Deriving 'Proxy'
+instance (P.Proxy p) => P.Proxy (SafeP p) where
+    request = \a' -> SafeP (P.request a')
+    respond = \b  -> SafeP (P.respond b )
+
+    fb' ->> p = SafeP ((\b' -> unSafeP (fb' b')) ->> unSafeP p)
+    fb' >\\ p = SafeP ((\b' -> unSafeP (fb' b')) >\\ unSafeP p)
+
+    p >>~ fb  = SafeP (unSafeP p >>~ (\b -> unSafeP (fb b)))
+    p //> fb  = SafeP (unSafeP p //> (\b -> unSafeP (fb b)))
+
+    turn p = SafeP (P.turn (unSafeP p))
+
+instance P.ProxyTrans SafeP where
+    liftP p = SafeP (P.liftP (P.liftP p))
+
+-- Deriving 'PFunctor'
+instance P.PFunctor SafeP where
+    hoistP nat p = SafeP (P.hoistP (P.hoistP nat) (unSafeP p))
 
 runSafeP
     :: (Monad m, P.Proxy p)
