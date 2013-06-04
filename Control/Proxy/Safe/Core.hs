@@ -1,27 +1,26 @@
 -- | Exception handling and resource management integrated with proxies
 
-{-# LANGUAGE Rank2Types, CPP #-}
+{-# LANGUAGE RankNTypes, CPP #-}
 
 module Control.Proxy.Safe.Core (
-    -- * Exception Handling
-    -- $exceptionp
-    module Control.Proxy.Trans.Either,
-    module Control.Exception,
+    -- * SafeP
     SafeP,
     runSafeP,
-    throw,
-    catch,
-    handle,
 
-    -- * Safe IO
+    -- * SafeIO
     SafeIO,
+    Interruptible(..),
     runSafeIO,
-    runSaferIO,
 
-    -- * Checked Exceptions
+    -- * Checking Exceptions
     -- $check
     CheckP(..),
     tryIO,
+
+    -- * Exception Handling
+    throw,
+    catch,
+    handle,
 
     -- * Finalization
     onAbort,
@@ -29,6 +28,10 @@ module Control.Proxy.Safe.Core (
     bracket,
     bracket_,
     bracketOnAbort,
+
+    -- Re-exports
+    module Control.Exception,
+    module Control.Proxy.Trans.Either
     ) where
 
 import qualified Control.Exception as Ex
@@ -53,18 +56,6 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Prelude hiding (catch)
 #endif
 import System.IO.Error (userError)
-
-{- $exceptionp
-    This module re-exports 'runEitherP' / 'runEitherK' from
-    @Control.Proxy.Trans.Either@ so that you can further unwrap the result of
-    'runSafeP'.
-
-    This module does not re-export 'E.throw', 'E.catch', and 'E.handle' from
-    @Control.Proxy.Trans.Either@, which would clash with the functions provided
-    here.
-
-    @Control.Exception@ re-exports 'SomeException' and 'Exception'.
--}
 
 data Finalizers = Finalizers { upstream :: !(IO ()), downstream :: !(IO ()) }
 
@@ -126,13 +117,19 @@ instance P.ProxyTrans SafeP where
 instance P.PFunctor SafeP where
     hoistP nat p = SafeP (P.hoistP (P.hoistP nat) (unSafeP p))
 
-{-| Unwrap a self-contained 'SafeP' pipeline, running all dropped finalizers at
+{-| Unwrap a self-contained 'SafeP' session, running all dropped finalizers at
     the end of the computation (ordering finalizers from upstream to downstream)
+
+    Note that all outbound values will be dropped.
 -}
 runSafeP
     :: (Monad m, P.Proxy p)
     => (forall x . SafeIO x -> m x)
-    -> SafeP p _a' () () _b m r -> EitherP SomeException p a' a b' b m r
+    -- ^ Monad morphism
+    -> SafeP p _a' () () _b m r
+    -- ^ Self-contained 'SafeP' session
+    -> EitherP SomeException p a' a b' b m r
+    -- ^ Unwrapped 'Session'
 runSafeP morph p = E.EitherP $ P.runIdentityP $ up >\\ (do
     let s0 = Finalizers (return ()) (return ())
     (e, _) <- P.IdentityP $ S.runStateP s0 $ E.runEitherP $ unSafeP $ do
@@ -157,7 +154,7 @@ catch
     :: (Ex.Exception e, Monad m, P.Proxy p)
     => SafeP p a' a b' b m r         -- ^ Original computation
     -> (e -> SafeP p a' a b' b m r)  -- ^ Handler
-    -> SafeP p a' a b' b m r
+    -> SafeP p a' a b' b m r         -- ^ Handled computation
 catch p f = SafeP (unSafeP p `E.catch` (\someExc ->
     case Ex.fromException someExc of
         Nothing -> E.throw someExc
@@ -169,7 +166,7 @@ handle
     :: (Ex.Exception e, Monad m, P.Proxy p)
     => (e -> SafeP p a' a b' b m r)  -- ^ Handler
     -> SafeP p a' a b' b m r         -- ^ Original computation
-    -> SafeP p a' a b' b m r
+    -> SafeP p a' a b' b m r         -- ^ Handled computation
 handle = flip catch
 {-# INLINABLE handle #-}
 
@@ -192,29 +189,26 @@ instance Monad SafeIO where
     return r = SafeIO (return r)
     m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
 
-{-| Runs a 'SafeIO' computation in a masked background.
+-- | Specify whether or not the masked computation is interruptible
+data Interruptible
+    = INTR
+    -- ^ Use 'Ex.mask'
+    | NoINTR
+    -- ^ Use 'Ex.uninterruptibleMask'
 
-    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
-    during 'try' or 'tryIO'.
+{-| 'runSafeIO' masks asynchronous exceptions and only unmasks them during 'try'
+    or 'tryIO'.
 
     'runSafeIO' is NOT a monad morphism.
 -}
-runSafeIO :: SafeIO r -> IO r
-runSafeIO m = Ex.mask $ \unmask ->
+runSafeIO :: Interruptible -> SafeIO r -> IO r
+runSafeIO interruptible m = maskingFunction $ \unmask ->
     runReaderT (unSafeIO m) (Mask unmask)
+  where
+    maskingFunction = case interruptible of
+        INTR   -> Ex.mask
+	NoINTR -> Ex.uninterruptibleMask
 {-# INLINABLE runSafeIO #-}
-
-{-| Runs a 'SafeIO' computation in an uninterruptible masked background.
-
-    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
-    unmasks them during 'try' or 'tryIO'.
-
-    'runSaferIO' is NOT a monad morphism.
--}
-runSaferIO :: SafeIO r -> IO r
-runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
-    runReaderT (unSafeIO m) (Mask unmask)
-{-# INLINABLE runSaferIO #-}
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
@@ -478,3 +472,13 @@ bracketOnAbort morph before after p = do
     h <- hoist morph $ tryIO before
     onAbort morph (after h) (p h)
 {-# INLINABLE bracketOnAbort #-}
+
+{- $reexports
+    @Control.Proxy.Trans.Either@ only re-exports 'runEitherP' and 'runEitherK'.
+
+    This module does not re-export 'E.throw', 'E.catch', and 'E.handle' from
+    @Control.Proxy.Trans.Either@, which would clash with the functions provided
+    here.
+
+    @Control.Exception@ only re-exports 'SomeException' and 'Exception'.
+-}
