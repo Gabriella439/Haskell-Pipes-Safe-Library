@@ -9,8 +9,8 @@ module Control.Proxy.Safe (
 
     -- * SafeIO
     SafeIO,
-    Interruptible(..),
     runSafeIO,
+    runSaferIO,
 
     -- * Checking Exceptions
     -- $check
@@ -201,26 +201,25 @@ instance Monad SafeIO where
     return r = SafeIO (return r)
     m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
 
--- | Specify whether or not the masked computation is interruptible
-data Interruptible
-    = INTR
-    -- ^ Use 'Ex.mask'
-    | NoINTR
-    -- ^ Use 'Ex.uninterruptibleMask'
-
-{-| 'runSafeIO' masks asynchronous exceptions and only unmasks them during 'try'
-    or 'tryIO'.
+{-| 'runSafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
+    them during 'try' or 'tryIO'.
 
     'runSafeIO' is NOT a monad morphism.
 -}
-runSafeIO :: Interruptible -> SafeIO r -> IO r
-runSafeIO interruptible m = maskingFunction $ \unmask ->
+runSafeIO :: SafeIO r -> IO r
+runSafeIO m = Ex.mask $ \unmask ->
     runReaderT (unSafeIO m) (Mask unmask)
-  where
-    maskingFunction = case interruptible of
-        INTR   -> Ex.mask
-	NoINTR -> Ex.uninterruptibleMask
 {-# INLINABLE runSafeIO #-}
+
+{-| 'runSaferIO' masks asynchronous exceptions using 'Ex.uninterruptibleMask'
+    and only unmasks them during 'try' or 'tryIO'.
+
+    'runSaferIO' is NOT a monad morphism.
+-}
+runSaferIO :: SafeIO r -> IO r
+runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
+    runReaderT (unSafeIO m) (Mask unmask)
+{-# INLINABLE runSaferIO #-}
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
