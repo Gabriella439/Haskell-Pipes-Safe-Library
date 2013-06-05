@@ -256,47 +256,26 @@ test.txt
 -}
 
 {- $checked
-    Exception handling works because 'SafeP' checks and stores all exceptions.
-    them using the 'ExceptionP' proxy transformer.  'SafeIO' masks all
-    asynchronous exceptions by default and only unmasks them in the middle of a
-    'try' or 'tryIO' block.  This prevents asynchronous exceptions from leaking
-    between the cracks.
+    Exception handling works because 'SafeIO' runs the entire pipeline within a
+    masked background that only permits asynchronous exceptions within 'try' or
+    'tryIO' blocks.  This allows 'SafeP' to check all exceptions and store them
+    in an internal 'EitherP' layer (which is how it implements 'throw' and
+    'catch').  When you run 'SafeP' you gain access to this 'EitherP' layer,
+    which will hold any exception that may have been raised:
 
-    'runSafeIO' reraises the stored exception when the 'Session' completes, but
-    you can also choose to preserve the exception as a 'Left' by using
-    'trySafeIO' instead:
+> runSafeP
+>     :: (Monad m, Proxy p)
+>     => SafeP p _a' () () _b m r
+>     -> EitherP SomeException p a' a b' b m r
 
-> main = do
->     tID <- myThreadId
->     forkIO $ do
->         threadDelay 1000
->         killThread tID
->     trySafeIO $ runProxy $ runEitherK $
->         foreverK (readFileS "test.txt") >-> tryK printD
-
->>> main
-...
-"Line 2"
-"Line 3"
-"Line 4"
-{Closing File}
-{File Open}
-"Line 1"
-"Line 2"
-{Closing File}
-Left thread killed
-
-    You can even choose whether to use 'mask' or 'uninterruptibleMask':
-
-    * 'runSafeIO' and 'trySafeIO' both use 'mask'
-
-    * 'runSaferIO' and 'trySaferIO' both use 'uninterruptibleMask'.
+    This is why you have to use 'runEitherK' in addition to 'runSafeK'.
 -}
 
 {- $prompt
-    Resource management primitives like 'bracket' only guarantee prompt
-    finalization in the face of exceptions.  Premature termination of
-    composition will delay the finalizer until the end of the 'Session'.
+    Resource management primitives like 'bracket' finalize immediately if they
+    terminate successfully or encounter an exception, but if another pipe
+    prematurely terminates then they will delay finalization to no later than
+    the end of the surrounding 'SafeP' block.
 
     For example, consider the following 'Session':
 
