@@ -6,6 +6,7 @@ module Control.Proxy.Safe (
     -- * SafeP
     SafeP,
     runSafeP,
+    runSafeK,
 
     -- * SafeIO
     SafeIO,
@@ -156,6 +157,17 @@ runSafeP morph p = E.EitherP $ P.runIdentityP $ up >\\ (do
     up _ = return ()
     dn _ = return ()
 
+-- | Run a 'SafeP' \'@K@\'leisli arrow
+runSafeK
+    :: (Monad m, P.Proxy p)
+    => (forall x . SafeIO x -> m x)
+    -- ^ Monad morphism
+    -> (q -> SafeP p _a' () () _b m r)
+    -- ^ Self-contained 'SafeP' session
+    -> (q -> EitherP SomeException p a' a b' b m r)
+    -- ^ Unwrapped 'Session'
+runSafeK morph k q = runSafeP morph (k q)
+
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
 throw e = SafeP (E.throw (Ex.toException e))
@@ -185,8 +197,8 @@ handle = flip catch
 newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
 
 {-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
-    during 'try' or 'tryIO' blocks.  This ensures that all exceptions are
-    checked.
+    during 'try' or 'tryIO' blocks.  This ensures that all asynchronous
+    exceptions are checked, too.
 -}
 newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Mask IO r }
 
