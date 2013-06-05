@@ -379,7 +379,7 @@ tryIO io = SafeP $ EitherP $ lift $ SafeIO $ ReaderT $ \(Mask restore) ->
     Ex.try $ restore io
 {-# INLINABLE tryIO #-}
 
-{-| Like 'tryIO', but does not mask asynchronous exceptions
+{-| Like 'tryIO', but masks asynchronous exceptions
 
     'maskIO' is a monad morphism.
 -}
