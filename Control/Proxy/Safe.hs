@@ -59,7 +59,7 @@ import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
 import Control.Proxy ((->>), (>>~), (>\\), (//>), (?>=))
 import qualified Control.Proxy.Trans.Either as E
-import Control.Proxy.Trans.Either hiding (throw, catch, handle)
+import Control.Proxy.Trans.Either (EitherP(EitherP, runEitherP), runEitherK)
 import qualified Control.Proxy.Trans.Maybe  as M
 import qualified Control.Proxy.Trans.Reader as R
 import qualified Control.Proxy.Trans.State  as S
@@ -379,7 +379,7 @@ tryIO io = SafeP $ EitherP $ lift $ SafeIO $ ReaderT $ \(Mask restore) ->
     Ex.try $ restore io
 {-# INLINABLE tryIO #-}
 
-{-| Like 'tryIO', but masks asynchronous exceptions
+{-| Checks all exceptions like 'tryIO', but masks asynchronous exceptions
 
     'maskIO' is a monad morphism.
 -}
@@ -561,7 +561,8 @@ writeFileD file x0 = do
 {-# INLINABLE writeFileD #-}
 
 {- $reexports
-    @Control.Proxy.Trans.Either@ only re-exports 'runEitherP' and 'runEitherK'.
+    @Control.Proxy.Trans.Either@ only re-exports 'EitherP', 'runEitherP', and
+    'runEitherK'.
 
     @Control.Exception@ only re-exports 'SomeException' and 'Exception'.
 -}
