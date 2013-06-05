@@ -92,7 +92,7 @@ import System.IO (withFile)
 
 > try :: (CheckP p) => p a' a b' b IO r -> SafeP p a' a b' b SafeIO r 
 >
-> try . printer :: (CheckP p, Show a) => () -> Consumer (Exception p) a SafeIO r
+> try . printer :: (CheckP p, Show a) => () -> Consumer (SafeP p) a SafeIO r
 >
 > session :: (CheckP p) => () -> Session (SafeP p) SafeIO ()
 > session = readFileS "test.txt" >-> try . printer
@@ -182,30 +182,24 @@ Right ()
 -}
 
 {- $native
-    Let's study the types a bit to understand what is going on:
+    @pipes-safe@ provides the 'throw' and 'catch' primitives that mirror their
+    counterparts in @Control.Exception@:
 
-> type ExceptionP = EitherP SomeException
-
-    'ExceptionP' is just a type synonym around 'EitherP'.  @pipes-safe@ uses
-    'EitherP' to check all exceptions in order to take advantage of the ability
-    to 'catch' and 'throw' exceptions locally.  In fact, "Control.Proxy.Safe"
-    defines specialized versions of 'throw' and 'catch' that mirror their
-    equivalents in @Control.Exception@:
-
-> throw :: (Monad m, Proxy p, Exception e) => e -> ExceptionP p a' a b' b m r
+> throw :: (Monad m, Proxy p, Exception e) => e -> SafeP p a' a b' b m r
 >
 > catch
 >     :: (Monad m, Proxy p, Exception e)
->     => ExceptionP p a' a b' b m r
->     -> (e -> ExceptionP p a' a b' b m r)
->     -> ExceptionP p a' a b' b m r
+>     => SafeP p a' a b' b m r
+>     -> (e -> SafeP p a' a b' b m r)
+>     -> SafeP p a' a b' b m r
 
     These let you embed native exception handling into proxies.  For example,
-    we could use exception handling to recover from a file opening error:
+    we can use exception handling to recover from a file opening error:
 
+> import Control.Exception (IOException)
 > import Prelude hiding (catch) -- if using base <= 4.5
 >
-> openFileS :: (CheckP p) => () -> Producer (ExceptionP p) String SafeIO ()
+> openFileS :: (CheckP p) => () -> Producer (SafeP p) String SafeIO ()
 > openFileS () = (do
 >     tryIO $ putStrLn "Select a file:"
 >     file <- tryIO getLine
@@ -214,7 +208,7 @@ Right ()
 >       tryIO $ print (e :: IOException)
 >       openFileS () )
 
->>> runSafeIO $ runProxy $ runEitherK $ openFileS >-> tryK printD
+>>> runSafeIO $ runProxy $ runEitherK $ runSafeK id $ openFileS >-> try . printD
 Select a file:
 oops
 oops: openFile: does not exist (No such file or directory)
@@ -230,8 +224,7 @@ test.txt
     You can even catch and resume from asynchronous exceptions:
 
 > heartbeat
->      :: Proxy p
->      => ExceptionP p a' a b' b SafeIO r -> ExceptionP p a' a b' b SafeIO r
+>     :: Proxy p => SafeP p a' a b' b SafeIO r -> SafeP p a' a b' b SafeIO r
 > heartbeat p = p `catch` (\e -> do
 >            let _ = e :: SomeException
 >            tryIO $ putStrLn "<Nice try!>"
@@ -242,14 +235,17 @@ test.txt
 >     forkIO $ forever $ do
 >         threadDelay 5000000  -- Every 5 seconds
 >         killThread tid
->     trySafeIO $ runProxy $ runEitherK $
->         heartbeat . (openFileS >-> tryK printD)
+>     runSafeIO $ runProxy $ runEitherK $ runSafeK id $
+>         heartbeat . (openFileS >-> try . printD)
 
 >>> main
 Select a file:
 te<Nice Try!>
 Select a file:
-st.txt
+st.txt<Enter>
+st.txt: openFile: does not exist (No such file or directory)
+Select a file:
+test.txt
 {File Open}
 "Line 1"
 "Line 2"
@@ -260,7 +256,7 @@ st.txt
 -}
 
 {- $checked
-    Exception handling works because 'SafeIO' checks all exceptions and stores
+    Exception handling works because 'SafeP' checks and stores all exceptions.
     them using the 'ExceptionP' proxy transformer.  'SafeIO' masks all
     asynchronous exceptions by default and only unmasks them in the middle of a
     'try' or 'tryIO' block.  This prevents asynchronous exceptions from leaking
