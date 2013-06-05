@@ -29,15 +29,18 @@ module Control.Proxy.Safe (
     bracket_,
     bracketOnAbort,
 
-    -- * Handle allocation
+    -- * Utilities
+
+    -- ** Handle allocation
     withFile,
 
-    -- * String I/O
+    -- ** String I/O
     -- $string
     readFileS,
     writeFileD,
 
-    -- Re-exports
+    -- * Re-exports
+    -- $reexports
     module Control.Exception,
     module Control.Proxy.Trans.Either
     ) where
@@ -498,6 +501,7 @@ withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
     allow users to test simple I/O without requiring any additional library
     dependencies.
 -}
+
 {-| Read from a file, lazily opening the 'IO.Handle' and automatically closing
     it afterwards
 -}
@@ -530,10 +534,6 @@ writeFileD file x0 = do
 
 {- $reexports
     @Control.Proxy.Trans.Either@ only re-exports 'runEitherP' and 'runEitherK'.
-
-    This module does not re-export 'E.throw', 'E.catch', and 'E.handle' from
-    @Control.Proxy.Trans.Either@, which would clash with the functions provided
-    here.
 
     @Control.Exception@ only re-exports 'SomeException' and 'Exception'.
 -}
