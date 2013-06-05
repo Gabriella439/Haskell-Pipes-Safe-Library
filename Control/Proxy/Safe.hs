@@ -206,7 +206,7 @@ instance Monad SafeIO where
 
     'runSafeIO' is NOT a monad morphism.
 -}
-runSafeIO :: SafeIO r -> IO r
+runSafeIO :: SafeIO e -> IO e
 runSafeIO m = Ex.mask $ \unmask ->
     runReaderT (unSafeIO m) (Mask unmask)
 {-# INLINABLE runSafeIO #-}
@@ -216,7 +216,7 @@ runSafeIO m = Ex.mask $ \unmask ->
 
     'runSaferIO' is NOT a monad morphism.
 -}
-runSaferIO :: SafeIO r -> IO r
+runSaferIO :: SafeIO e -> IO e
 runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
     runReaderT (unSafeIO m) (Mask unmask)
 {-# INLINABLE runSaferIO #-}
