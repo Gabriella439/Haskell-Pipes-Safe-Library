@@ -17,6 +17,7 @@ module Control.Proxy.Safe (
     -- $check
     CheckP(..),
     tryIO,
+    maskIO,
 
     -- * Exception Handling
     throw,
@@ -146,16 +147,21 @@ runSafeP
 runSafeP morph p = E.EitherP $ P.runIdentityP $ up >\\ (do
     let s0 = Finalizers (return ()) (return ())
     (e, _) <- P.IdentityP $ S.runStateP s0 $ E.runEitherP $ unSafeP $ do
-        r <- p
-        s1 <- SafeP $ P.liftP S.get
-        hoist morph $ tryIO $ do
-            upstream   s1
-            downstream s1
+        r <- p `catch` (\e -> do
+            fin
+            throw (e :: SomeException) )
+        fin
         return r
     return e ) //> dn
   where
     up _ = return ()
     dn _ = return ()
+    fin = do
+        s1 <- SafeP $ P.liftP S.get
+        hoist morph $ maskIO $ do
+            upstream   s1
+            downstream s1
+{-# INLINABLE runSafeP #-}
 
 -- | Run a 'SafeP' \'@K@\'leisli arrow
 runSafeK
@@ -167,6 +173,7 @@ runSafeK
     -> (q -> EitherP SomeException p a' a b' b m r)
     -- ^ Unwrapped 'Session'
 runSafeK morph k q = runSafeP morph (k q)
+{-# INLINABLE runSafeK #-}
 
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
@@ -363,7 +370,7 @@ instance (CheckP p) => CheckP (M.MaybeP p) where
                 Nothing -> Nothing
                 Just r  -> Just (Right r, s)
 
-{-| Check all exceptions for an 'IO' action
+{-| Check all exceptions for an 'IO' action, unmasking asynchronous exceptions
 
     'tryIO' is a monad morphism, with the same caveat as 'try'.
 -}
@@ -371,6 +378,13 @@ tryIO :: (P.Proxy p) => IO r -> SafeP p a' a b' b SafeIO r
 tryIO io = SafeP $ EitherP $ lift $ SafeIO $ ReaderT $ \(Mask restore) ->
     Ex.try $ restore io
 {-# INLINABLE tryIO #-}
+
+{-| Like 'tryIO', but does not mask asynchronous exceptions
+
+    'maskIO' is a monad morphism.
+-}
+maskIO :: (P.Proxy p) => IO r -> SafeP p a' a b' b SafeIO r
+maskIO io = SafeP $ EitherP $ lift $ SafeIO $ lift $ Ex.try io
 
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
@@ -404,7 +418,7 @@ onAbort
 onAbort morph after p =
     register (after >> return ()) p
         `catch` (\e -> do
-            hoist morph $ tryIO after
+            hoist morph $ maskIO after
             throw (e :: SomeException) )
 {-# INLINABLE onAbort #-}
 
@@ -415,7 +429,7 @@ onAbort morph after p =
 
 > finally morph after p = do
 >     r <- onAbort morph after p
->     hoist morph $ tryIO after
+>     hoist morph $ maskIO after
 >     return r
 -}
 finally
@@ -426,7 +440,7 @@ finally
     -> SafeP p a' a b' b m r
 finally morph after p = do
     r <- onAbort morph after p
-    hoist morph $ tryIO after
+    hoist morph $ maskIO after
     return r
 {-# INLINABLE finally #-}
 
@@ -439,7 +453,7 @@ finally morph after p = do
     resource will be released.
 
 > bracket morph before after p = do
->     h <- hoist morph $ tryIO before
+>     h <- hoist morph $ maskIO before
 >     finally morph (after h) (p h)
 -}
 bracket
@@ -450,7 +464,7 @@ bracket
     -> (h -> SafeP p a' a b' b m r)  -- ^ Use resource
     -> SafeP p a' a b' b m r
 bracket morph before after p = do
-    h <- hoist morph $ tryIO before
+    h <- hoist morph $ maskIO before
     finally morph (after h) (p h)
 {-# INLINABLE bracket #-}
 
@@ -460,7 +474,7 @@ bracket morph before after p = do
     if your base monad is already 'SafeIO'.
 
 > bracket_ morph before after p = do
->     hoist morph $ tryIO before
+>     hoist morph $ maskIO before
 >     finally morph after p
 -}
 bracket_
@@ -471,7 +485,7 @@ bracket_
     -> SafeP p a' a b' b m r         -- ^ Use resource
     -> SafeP p a' a b' b m r
 bracket_ morph before after p = do
-    hoist morph $ tryIO before
+    hoist morph $ maskIO before
     finally morph after p
 {-# INLINABLE bracket_ #-}
 
@@ -481,7 +495,7 @@ bracket_ morph before after p = do
     'id' if your base monad is already 'SafeIO'.
 
 > bracketOnAbort morph before after p = do
->     h <- hoist morph $ tryIO before
+>     h <- hoist morph $ maskIO before
 >     onAbort morph (after h) (p h)
 -}
 bracketOnAbort
@@ -492,7 +506,7 @@ bracketOnAbort
     -> (h -> SafeP p a' a b' b m r)  -- ^ Use resource
     -> SafeP p a' a b' b m r
 bracketOnAbort morph before after p = do
-    h <- hoist morph $ tryIO before
+    h <- hoist morph $ maskIO before
     onAbort morph (after h) (p h)
 {-# INLINABLE bracketOnAbort #-}
 
@@ -505,6 +519,7 @@ withFile
     -> (IO.Handle -> SafeP p a' a b' b m r)  -- ^Continuation
     -> SafeP p a' a b' b m r
 withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
+{-# INLINABLE withFile #-}
 
 {- $string
     Note that 'String's are very inefficient, and I will release future separate
@@ -528,6 +543,7 @@ readFileS file () = withFile id file IO.ReadMode $ \handle -> do
                     P.respond str
                     go
     go
+{-# INLINABLE readFileS #-}
 
 {-| Write to a file, lazily opening the 'IO.Handle' and automatically closing it
     afterwards
@@ -542,6 +558,7 @@ writeFileD file x0 = do
                 x2 <- P.respond str
                 go x2
         go x0
+{-# INLINABLE writeFileD #-}
 
 {- $reexports
     @Control.Proxy.Trans.Either@ only re-exports 'runEitherP' and 'runEitherK'.
