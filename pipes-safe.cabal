@@ -41,7 +41,5 @@ Library
         pipes        >= 3.2.0   && < 3.4
     Exposed-Modules:
         Control.Proxy.Safe,
-        Control.Proxy.Safe.Core,
-        Control.Proxy.Safe.Prelude,
         Control.Proxy.Safe.Tutorial
     GHC-Options: -O2
