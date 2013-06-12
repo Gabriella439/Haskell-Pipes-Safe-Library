@@ -13,18 +13,17 @@ module Control.Proxy.Safe.Prelude (
     ) where
 
 import Control.Proxy (Proxy(request, respond), Producer)
-import Control.Proxy.Safe.Core (SafeIO, ExceptionP, bracket, tryIO)
+import Control.Proxy.Safe.Core (SafeIO, MonadSafeIO, ExceptionP, bracket, tryIO)
 import qualified System.IO as IO
 
 -- | Safely allocate a 'IO.Handle' within a managed 'Proxy'
 withFile
-    :: (Monad m, Proxy p)
-    => (forall x . SafeIO x -> m x)               -- ^Monad morphism
-    -> FilePath                                   -- ^File
+    :: (MonadSafeIO m, Proxy p)
+    => FilePath                                   -- ^File
     -> IO.IOMode                                  -- ^IO Mode
     -> (IO.Handle -> ExceptionP p a' a b' b m r)  -- ^Continuation
     -> ExceptionP p a' a b' b m r
-withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
+withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
 
 {- $string
     Note that 'String's are very inefficient, and I will release future separate
@@ -37,7 +36,7 @@ withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
 -}
 readFileS
     :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
-readFileS file () = withFile id file IO.ReadMode $ \handle -> do
+readFileS file () = withFile file IO.ReadMode $ \handle -> do
     let go = do
             eof <- tryIO $ IO.hIsEOF handle
             if eof
@@ -54,7 +53,7 @@ readFileS file () = withFile id file IO.ReadMode $ \handle -> do
 writeFileD
     :: (Proxy p) => FilePath -> x -> ExceptionP p x String x String SafeIO r
 writeFileD file x0 = do
-    withFile id file IO.WriteMode $ \handle -> do
+    withFile file IO.WriteMode $ \handle -> do
         let go x = do
                 str <- request x
                 tryIO $ IO.hPutStrLn handle str

@@ -1,6 +1,6 @@
 -- | Exception handling and resource management integrated with proxies
 
-{-# LANGUAGE Rank2Types, CPP #-}
+{-# LANGUAGE CPP #-}
 
 module Control.Proxy.Safe.Core (
     -- * Exception Handling
@@ -13,6 +13,7 @@ module Control.Proxy.Safe.Core (
     handle,
 
     -- * Safe IO
+    MonadSafeIO,
     SafeIO,
     runSafeIO,
     runSaferIO,
@@ -43,18 +44,18 @@ module Control.Proxy.Safe.Core (
     ) where
 
 import qualified Control.Exception as Ex
-import Control.Exception (SomeException, Exception)
-import Control.Applicative (Applicative(pure, (<*>)))
+import Control.Exception (SomeException)
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
+import Control.Monad.Trans.Reader (ReaderT(ReaderT), asks)
 import qualified Control.Proxy as P
 import qualified Control.Proxy.Core.Fast as PF
 import qualified Control.Proxy.Core.Correct as PC
 import Control.Proxy ((->>), (>>~))
+import Control.Proxy.Safe.SafeIO
 import qualified Control.Proxy.Trans.Either as E
 import Control.Proxy.Trans.Either hiding (throw, catch, handle)
 import qualified Control.Proxy.Trans.Reader as R
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, readIORef, writeIORef)
 #if MIN_VERSION_base(4,6,0)
 #else
 import Prelude hiding (catch)
@@ -103,106 +104,7 @@ handle
     -> ExceptionP p a' a b' b m r
 handle = flip catch
 
-data Status = Status {
-    restore    :: forall a . IO a -> IO a,
-    upstream   :: IORef (IO ())          ,
-    downstream :: IORef (IO ())          }
 
-{-| 'SafeIO' masks asynchronous exceptions by default, and only unmasks them
-    during 'try' or 'tryIO' blocks in order to check all asynchronous
-    exceptions.
-
-    'SafeIO' also saves all finalizers dropped as a result of premature
-    termination and runs them when the 'P.Session' completes.
--}
-newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Status IO r }
-
-instance Functor SafeIO where
-    fmap f m = SafeIO (fmap f (unSafeIO m))
-
-instance Applicative SafeIO where
-    pure r  = SafeIO (pure r)
-    f <*> x = SafeIO (unSafeIO f <*> unSafeIO x)
-
-instance Monad SafeIO where
-    return r = SafeIO (return r)
-    m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
-
-{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
-    end and rethrowing any checked exceptions
-
-    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
-    during 'try' or 'tryIO'.
--}
-runSafeIO :: SafeIO (Either SomeException r) -> IO r
-runSafeIO m =
-    Ex.mask $ \restore -> do
-        huRef <- newIORef (return ())
-        hdRef <- newIORef (return ())
-        e <- runReaderT (unSafeIO m) (Status restore huRef hdRef)
-            `Ex.finally` (do
-                hu <- readIORef huRef
-                hu
-                hd <- readIORef hdRef
-                hd )
-        case e of
-            Left exc -> Ex.throwIO exc
-            Right r  -> return r
-
-{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
-    end and rethrowing any checked exceptions
-
-    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
-    unmasks them during 'try' or 'tryIO'.
--}
-runSaferIO :: SafeIO (Either SomeException r) -> IO r
-runSaferIO m =
-    Ex.uninterruptibleMask $ \restore -> do
-        huRef <- newIORef (return ())
-        hdRef <- newIORef (return ())
-        e <- runReaderT (unSafeIO m) (Status restore huRef hdRef)
-            `Ex.finally` (do
-                hu <- readIORef huRef
-                hu
-                hd <- readIORef hdRef
-                hd )
-        case e of
-            Left exc -> Ex.throwIO exc
-            Right r  -> return r
-
-{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
-    end and preserving exceptions as 'Left's
-
-    This uses 'Ex.mask' to mask asynchronous exceptions and only unmasks them
-    during 'try' or 'tryIO'.
--}
-trySafeIO :: SafeIO e -> IO e
-trySafeIO m =
-    Ex.mask $ \restore -> do
-        huRef <- newIORef (return ())
-        hdRef <- newIORef (return ())
-        runReaderT (unSafeIO m) (Status restore huRef hdRef) `Ex.finally` (do
-            hu <- readIORef huRef
-            hu
-            hd <- readIORef hdRef
-            hd )
-
-{-| Convert back to the 'IO' monad, running all dropped finalizers at the very
-    end and preserving exceptions as 'Left's
-
-    This uses 'Ex.uninterruptibleMask' to mask asynchronous exceptions and only
-    unmasks them during 'try' or 'tryIO'.
--}
-trySaferIO :: SafeIO e -> IO e
-trySaferIO m =
-    Ex.uninterruptibleMask $ \restore -> do
-        huRef <- newIORef (return ())
-        hdRef <- newIORef (return ())
-        runReaderT (unSafeIO m) (Status restore huRef hdRef) `Ex.finally` (do
-            hu <- readIORef huRef
-            hu
-            hd <- readIORef hdRef
-            hd )
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
@@ -212,15 +114,15 @@ trySaferIO m =
 
 * 'registerK' defines a functor from finalizers to functions:
 
-> registerK morph m1 . registerK morph m2 = registerK morph (m2 >> m1)
+> registerK m1 . registerK m2 = registerK (m2 >> m1)
 > 
-> registerK morph (return ()) = id
+> registerK (return ()) = id
 
 * 'registerK' is a functor between Kleisli categories:
 
-> registerK morph m (p1 >=> p2) = registerK morph m p1 >=> registerK morph m p2
+> registerK m (p1 >=> p2) = registerK m p1 >=> registerK m p2
 >
-> registerK morph m return = return
+> registerK m return = return
 
     These laws are not provable using the current set of proxy laws, mainly
     because the proxy laws do not yet specify how proxies interact with the
@@ -231,15 +133,14 @@ trySaferIO m =
     consider any violations of the above laws as bugs.
 -}
 register
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)
-    -> IO ()
+    :: (MonadSafeIO m, P.Proxy p)
+    => IO ()
     -> p a' a b' b m r
     -> p a' a b' b m r
-register morph h k =
-    P.runIdentityP . P.hoist morph . up
+register h k =
+    P.runIdentityP . P.hoist liftSafeIO . up
     ->> k
-    >>~ P.runIdentityP . P.hoist morph . dn
+    >>~ P.runIdentityP . P.hoist liftSafeIO . dn
   where
     dn b0 = do
         huRef <- lift $ SafeIO $ asks downstream
@@ -326,6 +227,12 @@ tryIO :: (P.Proxy p) => IO r -> ExceptionP p a' a b' b SafeIO r
 tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
     Ex.try $ restore s io
 
+
+-- This idiom popped up a few times, so I named it
+safely :: (MonadSafeIO m, P.Proxy p) => IO r -> ExceptionP p a' a b' b m r
+safely m = P.hoist liftSafeIO $ tryIO m
+{-# INLINE safely #-}
+
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
 
@@ -336,29 +243,28 @@ tryIO io = EitherP $ P.runIdentityP $ lift $ SafeIO $ ReaderT $ \s ->
     The first argument lifts 'onAbort' to work with other base monads.  Use
     'id' if your base monad is already 'SafeIO'.
 
-    @(onAbort morph fin)@ is a monad morphism:
+    @(onAbort fin)@ is a monad morphism:
 
-> onAbort morph fin $ do x <- m  =  do x <- onAbort morph fin m
->                        f x           onAbort morph fin (f x)
+> onAbort fin $ do x <- m  =  do x <- onAbort fin m
+>                  f x           onAbort fin (f x)
 >
-> onAbort morph fin (return x) = return x
+> onAbort fin (return x) = return x
 
     'onAbort' ensures finalizers are called from inside to out:
 
-> onAbort morph fin1 . onAbort morph fin2 = onAbort morph (fin2 >> fin1)
+> onAbort fin1 . onAbort fin2 = onAbort (fin2 >> fin1)
 >
-> onAbort morph (return ()) = id
+> onAbort (return ()) = id
 -}
 onAbort
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
-    -> IO r'                         -- ^ Action to run on abort
+    :: (MonadSafeIO m, P.Proxy p)
+    => IO r'                         -- ^ Action to run on abort
     -> ExceptionP p a' a b' b m r    -- ^ Guarded computation
     -> ExceptionP p a' a b' b m r
-onAbort morph after p =
-    register morph (after >> return ()) p
+onAbort after p =
+    register (after >> return ()) p
         `E.catch` (\e -> do
-            P.hoist morph $ tryIO after
+            safely after
             E.throw e )
 
 {-| Analogous to 'Ex.finally' from @Control.Exception@
@@ -366,20 +272,19 @@ onAbort morph after p =
     The first argument lifts 'finally' to work with other base monads.  Use 'id'
     if your base monad is already 'SafeIO'.
 
-> finally morph after p = do
->     r <- onAbort morph after p
->     hoist morph $ tryIO after
+> finally after p = do
+>     r <- onAbort after p
+>     hoist liftSafeIO $ tryIO after
 >     return r
 -}
 finally
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x) -- ^ Monad morphism
-    -> IO r'                        -- ^ Guaranteed final action
+    :: (MonadSafeIO m, P.Proxy p)
+    => IO r'                        -- ^ Guaranteed final action
     -> ExceptionP p a' a b' b m r   -- ^ Guarded computation
     -> ExceptionP p a' a b' b m r
-finally morph after p = do
-    r <- onAbort morph after p
-    P.hoist morph $ tryIO after
+finally after p = do
+    r <- onAbort after p
+    safely after
     return r
 
 {-| Analogous to 'Ex.bracket' from @Control.Exception@
@@ -390,60 +295,57 @@ finally morph after p = do
     'bracket' guarantees that if the resource acquisition completes, then the
     resource will be released.
 
-> bracket morph before after p = do
->     h <- hoist morph $ tryIO before
->     finally morph (after h) (p h)
+> bracket before after p = do
+>     h <- hoist liftSafeIO $ tryIO before
+>     finally (after h) (p h)
 -}
 bracket
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
-    -> IO h                               -- ^ Acquire resource
+    :: (MonadSafeIO m, P.Proxy p)
+    => IO h                               -- ^ Acquire resource
     -> (h -> IO r')                       -- ^ Release resource
     -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
     -> ExceptionP p a' a b' b m r
-bracket morph before after p = do
-    h <- P.hoist morph $ tryIO before
-    finally morph (after h) (p h)
+bracket before after p = do
+    h <- safely before
+    finally (after h) (p h)
 
 {-| Analogous to 'Ex.bracket_' from @Control.Exception@
 
     The first argument lifts 'bracket_' to work with any base monad.  Use 'id'
     if your base monad is already 'SafeIO'.
 
-> bracket_ morph before after p = do
->     hoist morph $ tryIO before
->     finally morph after p
+> bracket_ before after p = do
+>     hoist liftSafeIO $ tryIO before
+>     finally after p
 -}
 bracket_
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
-    -> IO r1                         -- ^ Acquire resource
+    :: (MonadSafeIO m, P.Proxy p)
+    => IO r1                         -- ^ Acquire resource
     -> IO r2                         -- ^ Release resource
     -> ExceptionP p a' a b' b m r    -- ^ Use resource
     -> ExceptionP p a' a b' b m r
-bracket_ morph before after p = do
-    P.hoist morph $ tryIO before
-    finally morph after p
+bracket_ before after p = do
+    safely before
+    finally after p
 
 {-| Analogous to 'Ex.bracketOnError' from @Control.Exception@
 
     The first argument lifts 'bracketOnAbort' to work with any base monad.  Use
     'id' if your base monad is already 'SafeIO'.
 
-> bracketOnAbort morph before after p = do
->     h <- hoist morph $ tryIO before
->     onAbort morph (after h) (p h)
+> bracketOnAbort before after p = do
+>     h <- hoist liftSafeIO $ tryIO before
+>     onAbort (after h) (p h)
 -}
 bracketOnAbort
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)       -- ^ Monad morphism
-    -> IO h                               -- ^ Acquire resource
+    :: (MonadSafeIO m, P.Proxy p)
+    => IO h                               -- ^ Acquire resource
     -> (h -> IO r')                       -- ^ Release resource
     -> (h -> ExceptionP p a' a b' b m r)  -- ^ Use resource
     -> ExceptionP p a' a b' b m r
-bracketOnAbort morph before after p = do
-    h <- P.hoist morph $ tryIO before
-    onAbort morph (after h) (p h)
+bracketOnAbort before after p = do
+    h <- safely before
+    onAbort (after h) (p h)
 
 {- $prompt
     This implementation will not /promptly/ finalize a 'P.Proxy' if another
