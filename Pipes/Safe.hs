@@ -2,7 +2,8 @@
 
 {-# LANGUAGE RankNTypes, CPP #-}
 
-module Control.Proxy.Safe (
+module Pipes.Safe (
+{-
     -- * SafeP
     SafeP,
     runSafeP,
@@ -45,106 +46,72 @@ module Control.Proxy.Safe (
     -- $reexports
     module Control.Exception,
     module Control.Proxy.Trans.Either
+-}
     ) where
 
+-- #if MIN_VERSION_base(4,6,0)
+-- #else
+import Prelude hiding (catch)
+-- #endif
+import qualified System.IO as IO
+
+import Control.Applicative (Applicative(pure, (<*>)))
 import qualified Control.Exception as Ex
-import Control.Exception (SomeException, Exception)
-import Control.Applicative (Applicative(pure, (<*>)), Alternative(empty, (<|>)))
-import Control.Monad (MonadPlus(mzero, mplus))
 import Control.Monad.Morph (MFunctor(hoist))
 import Control.Monad.Trans.Class (MonadTrans(lift))
+import Control.Monad.Trans.Error (
+    ErrorT(ErrorT, runErrorT), Error(noMsg, strMsg) )
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
-import qualified Control.Proxy as P
-import qualified Control.Proxy.Core.Fast as PF
-import qualified Control.Proxy.Core.Correct as PC
-import Control.Proxy ((->>), (>>~), (>\\), (//>), (?>=))
-import qualified Control.Proxy.Trans.Either as E
-import Control.Proxy.Trans.Either (EitherP(EitherP, runEitherP), runEitherK)
-import qualified Control.Proxy.Trans.Maybe  as M
-import qualified Control.Proxy.Trans.Reader as R
-import qualified Control.Proxy.Trans.State  as S
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-#if MIN_VERSION_base(4,6,0)
-#else
-import Prelude hiding (catch)
-#endif
-import qualified System.IO as IO
+import Control.Monad.Trans.State (StateT)
 import System.IO.Error (userError)
 
 data Finalizers = Finalizers { upstream :: !(IO ()), downstream :: !(IO ()) }
 
--- | 'SafeP' stores all checked 'Exception's and all registered finalizers
-newtype SafeP p a' a b' b m r = SafeP
-    { unSafeP :: EitherP SomeException (S.StateP Finalizers p) a' a b' b m r }
+newtype SafeT m r = SafeT {
+    unSafeT :: ErrorT Ex.SomeException (StateT Finalizers m) r }
 
 -- Deriving 'Functor'
-instance (Monad m, P.Proxy p) => Functor (SafeP p a' a b' b m) where
-    fmap f p = SafeP (fmap f (unSafeP p))
+instance (Monad m) => Functor (SafeT m) where
+    fmap f m = SafeT (do
+        x <- unSafeT m
+        return (f x) )
 
 -- Deriving 'Applicative'
-instance (Monad m, P.Proxy p) => Applicative (SafeP p a' a b' b m) where
-    pure r    = SafeP (pure r)
-    mf <*> mx = SafeP (unSafeP mf <*> unSafeP mx)
+instance (Monad m) => Applicative (SafeT m) where
+    pure r    = SafeT (return r)
+    mf <*> mx = SafeT (do
+        f <- unSafeT mf
+        x <- unSafeT mx
+        return (f x) )
 
 -- Deriving 'Monad'
-instance (Monad m, P.Proxy p) => Monad (SafeP p a' a b' b m) where
-    return r = SafeP (return r)
-    m >>= f  = SafeP (unSafeP m >>= \r -> unSafeP (f r))
+instance (Monad m) => Monad (SafeT m) where
+    return r = SafeT (return r)
+    m >>= f  = SafeT (unSafeT m >>= \r -> unSafeT (f r))
 
--- Deriving 'MonadTrans'
-instance (P.Proxy p) => MonadTrans (SafeP p a' a b' b) where
-    lift = P.lift_P
+instance MonadTrans SafeT where
+    lift m = SafeT (lift (lift m))
 
--- Deriving 'MFunctor'
-instance (P.Proxy p) => MFunctor (SafeP p a' a b' b) where
-    hoist = P.hoist_P
+instance MFunctor SafeT where
+    hoist f m = SafeT (hoist (hoist f) (unSafeT m))
 
--- Deriving 'ProxyInternal'
-instance (P.Proxy p) => P.ProxyInternal (SafeP p) where
-    return_P = \r -> SafeP (P.return_P r)
-    m ?>= f  = SafeP (unSafeP m ?>= \r -> unSafeP (f r))
+instance Error Ex.SomeException where
+    strMsg str = Ex.toException (userError str)
 
-    lift_P m = SafeP (P.lift_P m)
-
-    hoist_P nat p = SafeP (P.hoist_P nat (unSafeP p))
-
-    liftIO_P m = SafeP (P.liftIO_P m)
-
-    thread_P p s = SafeP (P.thread_P (unSafeP p) s)
-
--- Deriving 'Proxy'
-instance (P.Proxy p) => P.Proxy (SafeP p) where
-    request = \a' -> SafeP (P.request a')
-    respond = \b  -> SafeP (P.respond b )
-
-    fb' ->> p = SafeP ((\b' -> unSafeP (fb' b')) ->> unSafeP p)
-    fb' >\\ p = SafeP ((\b' -> unSafeP (fb' b')) >\\ unSafeP p)
-
-    p >>~ fb  = SafeP (unSafeP p >>~ (\b -> unSafeP (fb b)))
-    p //> fb  = SafeP (unSafeP p //> (\b -> unSafeP (fb b)))
-
-    turn p = SafeP (P.turn (unSafeP p))
-
-instance P.ProxyTrans SafeP where
-    liftP p = SafeP (P.liftP (P.liftP p))
-
-instance P.PFunctor SafeP where
-    hoistP nat p = SafeP (P.hoistP (P.hoistP nat) (unSafeP p))
-
+{-
 {-| Unwrap a self-contained 'SafeP' session, running all dropped finalizers at
     the end of the computation (ordering finalizers from upstream to downstream)
-
-    Note that all outbound values will be dropped.
 -}
 runSafeP
     :: (Monad m, P.Proxy p)
     => (forall x . SafeIO x -> m x)
     -- ^ Monad morphism
-    -> SafeP p _a' () () _b m r
-    -- ^ Self-contained 'SafeP' session
-    -> EitherP SomeException p a' a b' b m r
+    -> Effect (SafeT m) r
+    -- ^ Self-contained 'SafeT' session
+    -> Effect (ErrorT Ex.SomeException m) r
     -- ^ Unwrapped 'Session'
-runSafeP morph p = E.EitherP $ P.runIdentityP $ up >\\ (do
+runSafeP morph p = 
+runSafeP morph p = E.EitherP $ P.runIdentityP $ do
     let s0 = Finalizers (return ()) (return ())
     (e, _) <- P.IdentityP $ S.runStateP s0 $ E.runEitherP $ unSafeP $ do
         r <- p `catch` (\e -> do
@@ -152,10 +119,8 @@ runSafeP morph p = E.EitherP $ P.runIdentityP $ up >\\ (do
             throw (e :: SomeException) )
         fin
         return r
-    return e ) //> dn
+    return e
   where
-    up _ = return ()
-    dn _ = return ()
     fin = do
         s1 <- SafeP $ P.liftP S.get
         hoist morph $ maskIO $ do
@@ -565,4 +530,5 @@ writeFileD file x0 = do
     'runEitherK'.
 
     @Control.Exception@ only re-exports 'SomeException' and 'Exception'.
+-}
 -}
