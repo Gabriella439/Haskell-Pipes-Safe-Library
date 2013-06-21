@@ -62,7 +62,7 @@ import Control.Monad.Trans.Class (MonadTrans(lift))
 import Control.Monad.Trans.Error (
     ErrorT(ErrorT, runErrorT), Error(noMsg, strMsg) )
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
-import Control.Monad.Trans.State (StateT)
+import Control.Monad.Trans.State.Strict (StateT)
 import System.IO.Error (userError)
 
 data Finalizers = Finalizers { upstream :: !(IO ()), downstream :: !(IO ()) }
@@ -103,14 +103,14 @@ instance Error Ex.SomeException where
     the end of the computation (ordering finalizers from upstream to downstream)
 -}
 runSafeP
-    :: (Monad m, P.Proxy p)
+    :: (Monad m)
     => (forall x . SafeIO x -> m x)
     -- ^ Monad morphism
     -> Effect (SafeT m) r
-    -- ^ Self-contained 'SafeT' session
+    -- ^ Self-contained 'SafeT' 'Effect'
     -> Effect (ErrorT Ex.SomeException m) r
-    -- ^ Unwrapped 'Session'
-runSafeP morph p = 
+    -- ^ Unwrapped 'Effect'
+runSafeP morph p = hoist unSafeT p
 runSafeP morph p = E.EitherP $ P.runIdentityP $ do
     let s0 = Finalizers (return ()) (return ())
     (e, _) <- P.IdentityP $ S.runStateP s0 $ E.runEitherP $ unSafeP $ do
@@ -127,18 +127,6 @@ runSafeP morph p = E.EitherP $ P.runIdentityP $ do
             upstream   s1
             downstream s1
 {-# INLINABLE runSafeP #-}
-
--- | Run a 'SafeP' \'@K@\'leisli arrow
-runSafeK
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)
-    -- ^ Monad morphism
-    -> (q -> SafeP p _a' () () _b m r)
-    -- ^ Self-contained 'SafeP' session
-    -> (q -> EitherP SomeException p a' a b' b m r)
-    -- ^ Unwrapped 'Session'
-runSafeK morph k q = runSafeP morph (k q)
-{-# INLINABLE runSafeK #-}
 
 -- | Analogous to 'Ex.throwIO' from @Control.Exception@
 throw :: (Monad m, P.Proxy p, Ex.Exception e) => e -> SafeP p a' a b' b m r
