@@ -4,16 +4,16 @@
 
 module Pipes.Safe (
     -- * MonadSafe
-    MonadSafe(..),
+    MonadSafe(throw, catch, tryIO),
     handle,
 
     -- * SafeIO
     SafeIO,
-    promptly,
-    trySafeIO,
-    trySaferIO,
+    checkSafeIO,
+    checkSaferIO,
     runSafeIO,
     runSaferIO,
+    promptly,
 
     -- * Finalization
     onAbort,
@@ -30,10 +30,7 @@ module Pipes.Safe (
     -- ** String I/O
     -- $string
     readFile,
-    writeFile,
-
-    -- * Re-exports
-    -- $reexports
+    writeFile
     ) where
 
 import Prelude hiding (
@@ -155,12 +152,6 @@ _promptly m = do
         liftIO up `catch` (\e -> liftIO dn >> throw (e :: Ex.SomeException))
         liftIO dn
 
-{-| @promptly p@ runs all dropped finalizers that @p@ registered when @p@
-    completes.
--}
-promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
-promptly = _promptly
-
 _tryWith
     :: (((forall a . IO a -> IO a) -> IO (Either Ex.SomeException r))
         -> IO (Either Ex.SomeException r) )
@@ -179,29 +170,35 @@ _rethrow io = do
         Left  e -> Ex.throw e
         Right r -> return r
 
-{-| 'trySafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
+{-| 'checkSafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
     them during 'tryIO'.
 
     Returns caught exceptions in a 'Left'
 -}
-trySafeIO :: SafeIO r -> IO (Either Ex.SomeException r)
-trySafeIO = _tryWith Ex.mask
-{-# INLINABLE trySafeIO #-}
+checkSafeIO :: SafeIO r -> IO (Either Ex.SomeException r)
+checkSafeIO = _tryWith Ex.mask
+{-# INLINABLE checkSafeIO #-}
 
--- | Like 'trySafeIO', except using 'Ex.uninterruptibleMask'
-trySaferIO :: SafeIO r -> IO (Either Ex.SomeException r)
-trySaferIO = _tryWith Ex.uninterruptibleMask
-{-# INLINABLE trySaferIO #-}
+-- | Like 'checkSafeIO', except using 'Ex.uninterruptibleMask'
+checkSaferIO :: SafeIO r -> IO (Either Ex.SomeException r)
+checkSaferIO = _tryWith Ex.uninterruptibleMask
+{-# INLINABLE checkSaferIO #-}
 
--- | Like 'trySafeIO', except rethrows any caught exceptions
+-- | Like 'checkSafeIO', except rethrows any caught exceptions
 runSafeIO :: SafeIO r -> IO r
-runSafeIO sio = _rethrow (trySafeIO sio)
+runSafeIO sio = _rethrow (checkSafeIO sio)
 {-# INLINABLE runSafeIO #-}
 
--- | Like 'trySaferIO' except rethrows any caught exceptions
+-- | Like 'checkSaferIO' except rethrows any caught exceptions
 runSaferIO :: SafeIO r -> IO r
-runSaferIO sio = _rethrow (trySaferIO sio)
+runSaferIO sio = _rethrow (checkSaferIO sio)
 {-# INLINABLE runSaferIO #-}
+
+{-| @promptly p@ runs all dropped finalizers that @p@ registered when @p@
+    completes.
+-}
+promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
+promptly = _promptly
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
@@ -249,54 +246,32 @@ register h p = up >\\ p //> dn
         putFinalizers old
         return a
 
-{- $check
-    The following @try@ functions are the only way to convert 'IO' actions to
-    'SafeIO'.  These functions check all exceptions, including asynchronous
-    exceptions, and store them in the 'SafeP' proxy transformer.
--}
-
-{-| Use 'try' to retroactively check all exceptions for proxies that implement
-    'CheckP'.
-
-    'try' is /almost/ a proxy morphism (See @Control.Proxy.Morph@ from @pipes@
-    for the full list of laws).  The only exception is the following law:
-
-> try (return x) = return x
-
-    The left-hand side unmasks asynchronous exceptions and checks them
-    immediately, whereas the right-hand side delays asynchronous exceptions
-    until the next 'try' or 'tryIO' block.
--}
-
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
 
     * premature termination, and
 
-    * exceptions in other proxy stages.
+    * exceptions in other pipe stages.
 
-    The first argument lifts 'onAbort' to work with other base monads.  Use
-    'id' if your base monad is already 'SafeIO'.
+    @(`onAbort` fin)@ is a monad morphism:
 
-    @(onAbort morph fin)@ is a monad morphism:
-
-> onAbort morph fin $ do x <- m  =  do x <- onAbort morph fin m
->                        f x           onAbort morph fin (f x)
+> (`onAbort` fin) $ do x <- m  =  do x <- m `onAbort` fin
+>                      f x           f x `onAbort` fin
 >
-> onAbort morph fin (return x) = return x
+> return x `onAbort` fin = return x
 
     'onAbort' ensures finalizers are called from inside to out:
 
-> onAbort morph fin1 . onAbort morph fin2 = onAbort morph (fin2 >> fin1)
+> (`onAbort` fin1) . (`onAbort` fin2) = (`onAbort` (fin2 >> fin1))
 >
-> onAbort morph (return ()) = id
+> (`onAbort` return ()) = id
 -}
 onAbort
     :: (MonadSafe m)
-    => IO s                -- ^ Action to run on abort
-    -> Proxy a' a b' b m r -- ^ Guarded computation
+    => Proxy a' a b' b m r -- ^ Guarded computation
+    -> IO s                -- ^ Action to run on abort
     -> Proxy a' a b' b m r
-onAbort after p =
+onAbort p after =
     register (after >> return ()) p
         `catch` (\e -> do
             liftIO after
@@ -305,12 +280,9 @@ onAbort after p =
 
 {-| Analogous to 'Ex.finally' from @Control.Exception@
 
-    The first argument lifts 'finally' to work with other base monads.  Use 'id'
-    if your base monad is already 'SafeIO'.
-
-> finally morph after p = do
->     r <- onAbort morph after p
->     hoist morph $ maskIO after
+> finally p after = do
+>     r <- p `onAbort` after
+>     liftIO after
 >     return r
 -}
 finally
@@ -319,22 +291,19 @@ finally
     -> IO s                -- ^ Guaranteed final action
     -> Proxy a' a b' b m r
 finally p after = do
-    r <- onAbort after p
+    r <- p `onAbort` after
     liftIO after
     return r
 {-# INLINABLE finally #-}
 
 {-| Analogous to 'Ex.bracket' from @Control.Exception@
 
-    The first argument lifts 'bracket' to work with other base monads.  Use 'id'
-    if your base monad is already 'SafeIO'.
-
     'bracket' guarantees that if the resource acquisition completes, then the
     resource will be released.
 
-> bracket morph before after p = do
->     h <- hoist morph $ maskIO before
->     finally morph (after h) (p h)
+> bracket before after p = do
+>     h <- liftIO before
+>     p h `finally` after h
 -}
 bracket
     :: (MonadSafe m)
@@ -349,12 +318,9 @@ bracket before after p = do
 
 {-| Analogous to 'Ex.bracket_' from @Control.Exception@
 
-    The first argument lifts 'bracket_' to work with any base monad.  Use 'id'
-    if your base monad is already 'SafeIO'.
-
-> bracket_ morph before after p = do
->     hoist morph $ maskIO before
->     finally morph after p
+> bracket_ before after p = do
+>     liftIO before
+>     p `finally` after
 -}
 bracket_
     :: (MonadSafe m)
@@ -369,12 +335,9 @@ bracket_ before after p = do
 
 {-| Analogous to 'Ex.bracketOnError' from @Control.Exception@
 
-    The first argument lifts 'bracketOnAbort' to work with any base monad.  Use
-    'id' if your base monad is already 'SafeIO'.
-
-> bracketOnAbort morph before after p = do
->     h <- hoist morph $ maskIO before
->     onAbort morph (after h) (p h)
+> bracketOnAbort before after p = do
+>     h <- liftIO before
+>     p h `onAbort` after h
 -}
 bracketOnAbort
     :: (MonadSafe m)
@@ -384,15 +347,15 @@ bracketOnAbort
     -> Proxy a' a b' b m r
 bracketOnAbort before after p = do
     h <- liftIO before
-    onAbort (after h) (p h)
+    p h `onAbort` after h
 {-# INLINABLE bracketOnAbort #-}
 
 -- | Safely allocate a 'IO.Handle' within a managed 'Proxy'
 withFile
     :: (MonadSafe m)
-    => FilePath                            -- ^File
-    -> IO.IOMode                           -- ^IO Mode
-    -> (IO.Handle -> Proxy a' a b' b m r)  -- ^Continuation
+    => FilePath
+    -> IO.IOMode
+    -> (IO.Handle -> Proxy a' a b' b m r)
     -> Proxy a' a b' b m r
 withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
 {-# INLINABLE withFile #-}
@@ -428,10 +391,3 @@ writeFile file () = withFile file IO.WriteMode $ \handle -> forever $ do
     str <- request ()
     tryIO $ IO.hPutStrLn handle str
 {-# INLINABLE writeFile #-}
-
-{- $reexports
-    @Control.Proxy.Trans.Either@ only re-exports 'EitherP', 'runEitherP', and
-    'runEitherK'.
-
-    @Control.Exception@ only re-exports 'SomeException' and 'Exception'.
--}
