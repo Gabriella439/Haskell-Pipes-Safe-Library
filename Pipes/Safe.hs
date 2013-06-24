@@ -3,29 +3,17 @@
 {-# LANGUAGE RankNTypes, CPP #-}
 
 module Pipes.Safe (
-{-
-    -- * SafeP
-    SafeP,
-    runSafeP,
-    runSafeK,
+    -- * MonadSafe
+    MonadSafe(..),
+    handle,
 
     -- * SafeIO
     SafeIO,
+    promptly,
     trySafeIO,
     trySaferIO,
     runSafeIO,
     runSaferIO,
-
-    -- * Checking Exceptions
-    -- $check
-    CheckP(..),
-    tryIO,
-    maskIO,
-
-    -- * Exception Handling
-    throw,
-    catch,
-    handle,
 
     -- * Finalization
     onAbort,
@@ -41,20 +29,20 @@ module Pipes.Safe (
 
     -- ** String I/O
     -- $string
-    readFileS,
-    writeFileD,
+    readFile,
+    writeFile,
 
     -- * Re-exports
     -- $reexports
-    module Control.Exception,
-    module Control.Proxy.Trans.Either
--}
     ) where
 
--- #if MIN_VERSION_base(4,6,0)
--- #else
-import Prelude hiding (catch)
--- #endif
+import Prelude hiding (
+#if MIN_VERSION_base(4,6,0)
+#else
+    catch,
+#endif
+    readFile, writeFile
+    )
 import qualified System.IO as IO
 
 import Control.Applicative (Applicative(pure, (<*>)), (<*))
@@ -110,6 +98,11 @@ class (MonadIO m) => MonadSafe m where
     getFinalizers :: m Finalizers
     putFinalizers :: Finalizers -> m ()
 
+-- | Analogous to 'Ex.handle' from @Control.Exception@
+handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
+handle = flip catch
+{-# INLINABLE handle #-}
+
 instance MonadIO SafeIO where
     liftIO io = SafeIO $ ErrorT $ lift $ lift $ Ex.try io
 
@@ -162,6 +155,9 @@ _promptly m = do
         liftIO up `catch` (\e -> liftIO dn >> throw (e :: Ex.SomeException))
         liftIO dn
 
+{-| @promptly p@ runs all dropped finalizers that @p@ registered when @p@
+    completes.
+-}
 promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
 promptly = _promptly
 
@@ -183,36 +179,29 @@ _rethrow io = do
         Left  e -> Ex.throw e
         Right r -> return r
 
+{-| 'trySafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
+    them during 'tryIO'.
+
+    Returns caught exceptions in a 'Left'
+-}
 trySafeIO :: SafeIO r -> IO (Either Ex.SomeException r)
 trySafeIO = _tryWith Ex.mask
 {-# INLINABLE trySafeIO #-}
 
+-- | Like 'trySafeIO', except using 'Ex.uninterruptibleMask'
 trySaferIO :: SafeIO r -> IO (Either Ex.SomeException r)
 trySaferIO = _tryWith Ex.uninterruptibleMask
 {-# INLINABLE trySaferIO #-}
 
-{-| 'runSafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
-    them during 'try' or 'tryIO'.
-
-    'runSafeIO' is NOT a monad morphism.
--}
+-- | Like 'trySafeIO', except rethrows any caught exceptions
 runSafeIO :: SafeIO r -> IO r
 runSafeIO sio = _rethrow (trySafeIO sio)
 {-# INLINABLE runSafeIO #-}
 
-{-| 'runSaferIO' masks asynchronous exceptions using 'Ex.uninterruptibleMask'
-    and only unmasks them during 'try' or 'tryIO'.
-
-    'runSaferIO' is NOT a monad morphism.
--}
-runSaferIO :: SafeIO e -> IO e
+-- | Like 'trySaferIO' except rethrows any caught exceptions
+runSaferIO :: SafeIO r -> IO r
 runSaferIO sio = _rethrow (trySaferIO sio)
 {-# INLINABLE runSaferIO #-}
-
--- | Analogous to 'Ex.handle' from @Control.Exception@
-handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
-handle = flip catch
-{-# INLINABLE handle #-}
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
