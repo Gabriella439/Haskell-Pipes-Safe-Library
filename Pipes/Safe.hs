@@ -11,6 +11,8 @@ module Pipes.Safe (
 
     -- * SafeIO
     SafeIO,
+    trySafeIO,
+    trySaferIO,
     runSafeIO,
     runSaferIO,
 
@@ -63,7 +65,7 @@ import Control.Monad.Trans.Class (MonadTrans(lift))
 import Control.Monad.Trans.Error (
     ErrorT(ErrorT, runErrorT), Error(noMsg, strMsg), throwError, catchError )
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
-import Control.Monad.Trans.State.Strict (StateT, get, put)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import Pipes
 import qualified Pipes.Lift as PL
 import System.IO.Error (userError)
@@ -149,25 +151,53 @@ newFinalizers = do
         Nothing:mas' -> (sequence_ (reverse as), mas')
         Just a :mas' -> go (a:as) mas'
 
-promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
-promptly p = do
+_promptly :: (MonadSafe m) => m r -> m r
+_promptly m = do
     markStartingPoint
-    (p     >>= (\r -> cleanup >> return  r                     ))
+    (m     >>= (\r -> cleanup >> return  r                     ))
        `catch` (\e -> cleanup >> throw  (e :: Ex.SomeException))
   where
     cleanup = do
         (up, dn) <- newFinalizers
-        liftIO (up >> dn)
+        liftIO up `catch` (\e -> liftIO dn >> throw (e :: Ex.SomeException))
+        liftIO dn
 
-{-
+promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
+promptly = _promptly
+
+_tryWith
+    :: (((forall a . IO a -> IO a) -> IO (Either Ex.SomeException r))
+        -> IO (Either Ex.SomeException r) )
+    -> SafeIO r
+    -> IO (Either Ex.SomeException r)
+_tryWith mask sio = mask $ \restore ->
+    runReaderT (evalStateT (runErrorT (unSafeIO sio0)) s0) (Mask restore)
+  where
+    sio0 = _promptly sio
+    s0   = Finalizers [] []
+
+_rethrow :: IO (Either Ex.SomeException r) -> IO r
+_rethrow io = do
+    x <- io
+    case x of
+        Left  e -> Ex.throw e
+        Right r -> return r
+
+trySafeIO :: SafeIO r -> IO (Either Ex.SomeException r)
+trySafeIO = _tryWith Ex.mask
+{-# INLINABLE trySafeIO #-}
+
+trySaferIO :: SafeIO r -> IO (Either Ex.SomeException r)
+trySaferIO = _tryWith Ex.uninterruptibleMask
+{-# INLINABLE trySaferIO #-}
+
 {-| 'runSafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
     them during 'try' or 'tryIO'.
 
     'runSafeIO' is NOT a monad morphism.
 -}
-runSafeIO :: SafeIO r -> IO e
-runSafeIO m = Ex.mask $ \unmask ->
-    runReaderT (runErrorT (unSafeIO m)) (Mask unmask)
+runSafeIO :: SafeIO r -> IO r
+runSafeIO sio = _rethrow (trySafeIO sio)
 {-# INLINABLE runSafeIO #-}
 
 {-| 'runSaferIO' masks asynchronous exceptions using 'Ex.uninterruptibleMask'
@@ -176,27 +206,8 @@ runSafeIO m = Ex.mask $ \unmask ->
     'runSaferIO' is NOT a monad morphism.
 -}
 runSaferIO :: SafeIO e -> IO e
-runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
-    runReaderT (unSafeIO m) (Mask unmask)
+runSaferIO sio = _rethrow (trySaferIO sio)
 {-# INLINABLE runSaferIO #-}
-
-{-| Unwrap a self-contained 'SafeP' session, running all dropped finalizers at
-    the end of the computation (ordering finalizers from upstream to downstream)
--}
-runSafeP
-    :: Effect (SafeT                   SafeIO) r
-    -> Effect (ErrorT Ex.SomeException SafeIO) r
-runSafeP p = do
-    let s0 = Finalizers (return ()) (return ())
-    (x1, finalizers) <- hoist lift $ runStateP s0 $ runErrorP $ hoist unSafeT p
-    (x2, x3) <- lift $ lift $ SafeIO $ lift $ do
-        x2 <- Ex.try $ upstream   finalizers
-        x3 <- Ex.try $ downstream finalizers
-	return (x2, x3)
-    case (x1 <* x2 <* x3) of
-        Left  e -> lift $ throwError e
-        Right r -> return r
-{-# INLINABLE runSafeP #-}
 
 -- | Analogous to 'Ex.handle' from @Control.Exception@
 handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
@@ -238,13 +249,13 @@ register h p = up >\\ p //> dn
   where
     dn b = do
         old <- getFinalizers
-        putFinalizers $ old { upstream = (upstream old >> h) }
+        putFinalizers $ old { upstream = Just h:upstream old }
 	b' <- respond b
 	putFinalizers old
 	return b'
     up a' = do
         old <- getFinalizers
-        putFinalizers $ old { downstream = (downstream old >> h) }
+        putFinalizers $ old { downstream = Just h:downstream old }
         a  <- request a'
         putFinalizers old
         return a
@@ -293,7 +304,7 @@ register h p = up >\\ p //> dn
 -}
 onAbort
     :: (MonadSafe m)
-    => IO r'               -- ^ Action to run on abort
+    => IO s                -- ^ Action to run on abort
     -> Proxy a' a b' b m r -- ^ Guarded computation
     -> Proxy a' a b' b m r
 onAbort after p =
@@ -314,12 +325,13 @@ onAbort after p =
 >     return r
 -}
 finally
-    :: IO r'                            -- ^ Guaranteed final action
-    -> Proxy a' a b' b (SafeT SafeIO) r -- ^ Guarded computation
-    -> Proxy a' a b' b (SafeT SafeIO) r
-finally after p = do
+    :: (MonadSafe m)
+    => Proxy a' a b' b m r -- ^ Guarded computation
+    -> IO s                -- ^ Guaranteed final action
+    -> Proxy a' a b' b m r
+finally p after = do
     r <- onAbort after p
-    lift $ maskIO after
+    liftIO after
     return r
 {-# INLINABLE finally #-}
 
@@ -336,15 +348,14 @@ finally after p = do
 >     finally morph (after h) (p h)
 -}
 bracket
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
-    -> IO h                          -- ^ Acquire resource
-    -> (h -> IO r')                  -- ^ Release resource
-    -> (h -> SafeP p a' a b' b m r)  -- ^ Use resource
-    -> SafeP p a' a b' b m r
-bracket morph before after p = do
-    h <- hoist morph $ maskIO before
-    finally morph (after h) (p h)
+    :: (MonadSafe m)
+    => IO h                        -- ^ Acquire resource
+    -> (h -> IO r')                -- ^ Release resource
+    -> (h -> Proxy a' a b' b m r)  -- ^ Use resource
+    -> Proxy a' a b' b m r
+bracket before after p = do
+    h <- liftIO before
+    p h `finally` after h
 {-# INLINABLE bracket #-}
 
 {-| Analogous to 'Ex.bracket_' from @Control.Exception@
@@ -357,15 +368,14 @@ bracket morph before after p = do
 >     finally morph after p
 -}
 bracket_
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
-    -> IO r1                         -- ^ Acquire resource
-    -> IO r2                         -- ^ Release resource
-    -> SafeP p a' a b' b m r         -- ^ Use resource
-    -> SafeP p a' a b' b m r
-bracket_ morph before after p = do
-    hoist morph $ maskIO before
-    finally morph after p
+    :: (MonadSafe m)
+    => IO s                 -- ^ Acquire resource
+    -> IO t                 -- ^ Release resource
+    -> Proxy a' a b' b m r  -- ^ Use resource
+    -> Proxy a' a b' b m r
+bracket_ before after p = do
+    liftIO before
+    p `finally` after
 {-# INLINABLE bracket_ #-}
 
 {-| Analogous to 'Ex.bracketOnError' from @Control.Exception@
@@ -378,26 +388,24 @@ bracket_ morph before after p = do
 >     onAbort morph (after h) (p h)
 -}
 bracketOnAbort
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)  -- ^ Monad morphism
-    -> IO h                          -- ^ Acquire resource
-    -> (h -> IO r')                  -- ^ Release resource
-    -> (h -> SafeP p a' a b' b m r)  -- ^ Use resource
-    -> SafeP p a' a b' b m r
-bracketOnAbort morph before after p = do
-    h <- hoist morph $ maskIO before
-    onAbort morph (after h) (p h)
+    :: (MonadSafe m)
+    => IO h                        -- ^ Acquire resource
+    -> (h -> IO s)                 -- ^ Release resource
+    -> (h -> Proxy a' a b' b m r)  -- ^ Use resource
+    -> Proxy a' a b' b m r
+bracketOnAbort before after p = do
+    h <- liftIO before
+    onAbort (after h) (p h)
 {-# INLINABLE bracketOnAbort #-}
 
 -- | Safely allocate a 'IO.Handle' within a managed 'Proxy'
 withFile
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x)          -- ^Monad morphism
-    -> FilePath                              -- ^File
-    -> IO.IOMode                             -- ^IO Mode
-    -> (IO.Handle -> SafeP p a' a b' b m r)  -- ^Continuation
-    -> SafeP p a' a b' b m r
-withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
+    :: (MonadSafe m)
+    => FilePath                            -- ^File
+    -> IO.IOMode                           -- ^IO Mode
+    -> (IO.Handle -> Proxy a' a b' b m r)  -- ^Continuation
+    -> Proxy a' a b' b m r
+withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
 {-# INLINABLE withFile #-}
 
 {- $string
@@ -410,39 +418,31 @@ withFile morph file ioMode = bracket morph (IO.openFile file ioMode) IO.hClose
 {-| Read from a file, lazily opening the 'IO.Handle' and automatically closing
     it afterwards
 -}
-readFileS
-    :: (P.Proxy p) => FilePath -> () -> P.Producer (SafeP p) String SafeIO ()
-readFileS file () = withFile id file IO.ReadMode $ \handle -> do
+readFile :: FilePath -> () -> Producer String SafeIO ()
+readFile file () = withFile file IO.ReadMode $ \handle -> do
     let go = do
             eof <- tryIO $ IO.hIsEOF handle
             if eof
                 then return ()
                 else do
                     str <- tryIO $ IO.hGetLine handle
-                    P.respond str
+                    respond str
                     go
     go
-{-# INLINABLE readFileS #-}
+{-# INLINABLE readFile #-}
 
 {-| Write to a file, lazily opening the 'IO.Handle' and automatically closing it
     afterwards
 -}
-writeFileD
-    :: (P.Proxy p) => FilePath -> x -> SafeP p x String x String SafeIO r
-writeFileD file x0 = do
-    withFile id file IO.WriteMode $ \handle -> do
-        let go x = do
-                str <- P.request x
-                tryIO $ IO.hPutStrLn handle str
-                x2 <- P.respond str
-                go x2
-        go x0
-{-# INLINABLE writeFileD #-}
+writeFile :: FilePath -> () -> Consumer String SafeIO r
+writeFile file () = withFile file IO.WriteMode $ \handle -> forever $ do
+    str <- request ()
+    tryIO $ IO.hPutStrLn handle str
+{-# INLINABLE writeFile #-}
 
 {- $reexports
     @Control.Proxy.Trans.Either@ only re-exports 'EitherP', 'runEitherP', and
     'runEitherK'.
 
     @Control.Exception@ only re-exports 'SomeException' and 'Exception'.
--}
 -}
