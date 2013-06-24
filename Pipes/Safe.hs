@@ -57,23 +57,30 @@ import qualified System.IO as IO
 
 import Control.Applicative (Applicative(pure, (<*>)), (<*))
 import qualified Control.Exception as Ex
+import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Morph (MFunctor(hoist))
 import Control.Monad.Trans.Class (MonadTrans(lift))
 import Control.Monad.Trans.Error (
-    ErrorT(ErrorT, runErrorT), Error(noMsg, strMsg), throwError )
+    ErrorT(ErrorT, runErrorT), Error(noMsg, strMsg), throwError, catchError )
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
 import Control.Monad.Trans.State.Strict (StateT, get, put)
 import Pipes
-import Pipes.Lift
+import qualified Pipes.Lift as PL
 import System.IO.Error (userError)
 
 newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
+
+data Finalizers = Finalizers
+    { upstream   :: [Maybe (IO ())]
+    , downstream :: [Maybe (IO ())]
+    }
 
 {-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
     during 'try' or 'tryIO' blocks.  This ensures that all asynchronous
     exceptions are checked, too.
 -}
-newtype SafeIO r = SafeIO { unSafeIO :: ReaderT Mask IO r }
+newtype SafeIO r = SafeIO { unSafeIO
+    :: ErrorT Ex.SomeException (StateT Finalizers (ReaderT Mask IO)) r }
 
 instance Functor SafeIO where
     fmap f m = SafeIO (fmap f (unSafeIO m))
@@ -86,14 +93,81 @@ instance Monad SafeIO where
     return r = SafeIO (return r)
     m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
 
+instance Error Ex.SomeException where
+    strMsg str = Ex.toException (userError str)
+
+class (MonadIO m) => MonadSafe m where
+    -- | Analogous to 'Ex.throwIO' from @Control.Exception@
+    throw :: (Ex.Exception e) => e -> m r
+    -- | Analogous to 'Ex.catch' from @Control.Exception@
+    catch :: (Ex.Exception e) => m r -> (e -> m r) -> m r
+    {-| Check all exceptions for an 'IO' action, unmasking asynchronous
+        exceptions
+    -}
+    tryIO :: IO r -> m r
+    getFinalizers :: m Finalizers
+    putFinalizers :: Finalizers -> m ()
+
+instance MonadIO SafeIO where
+    liftIO io = SafeIO $ ErrorT $ lift $ lift $ Ex.try io
+
+instance MonadSafe SafeIO where
+    throw e = SafeIO $ throwError (Ex.toException e)
+    catch m f = SafeIO $ unSafeIO m `catchError` (\someExc ->
+        case Ex.fromException someExc of
+            Nothing -> throwError someExc
+            Just e  -> unSafeIO (f e) )
+    tryIO  io = SafeIO $ ErrorT $ lift $ do
+        restore <- asks unMask
+        lift $ Ex.try (restore io)
+    getFinalizers = SafeIO $ lift get
+    putFinalizers finalizers = SafeIO $ lift $ put finalizers
+
+instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
+    throw = lift . throw
+    catch = PL.liftCatchError catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+markStartingPoint :: (MonadSafe m) => m ()
+markStartingPoint = do
+    Finalizers up dn <- getFinalizers
+    putFinalizers (Finalizers (Nothing:up) (Nothing:dn))
+
+newFinalizers :: (MonadSafe m) => m (IO (), IO ())
+newFinalizers = do
+    Finalizers ups dns <- getFinalizers
+    let (newUps, ups') = new ups
+        (newDns, dns') = new dns
+    putFinalizers (Finalizers ups' dns')
+    return (newUps, newDns)
+  where
+    new = go []
+    go as mas = case mas of
+        []           -> (sequence_ (reverse as), []  )
+        Nothing:mas' -> (sequence_ (reverse as), mas')
+        Just a :mas' -> go (a:as) mas'
+
+promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
+promptly p = do
+    markStartingPoint
+    (p     >>= (\r -> cleanup >> return  r                     ))
+       `catch` (\e -> cleanup >> throw  (e :: Ex.SomeException))
+  where
+    cleanup = do
+        (up, dn) <- newFinalizers
+        liftIO (up >> dn)
+
+{-
 {-| 'runSafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
     them during 'try' or 'tryIO'.
 
     'runSafeIO' is NOT a monad morphism.
 -}
-runSafeIO :: SafeIO e -> IO e
+runSafeIO :: SafeIO r -> IO e
 runSafeIO m = Ex.mask $ \unmask ->
-    runReaderT (unSafeIO m) (Mask unmask)
+    runReaderT (runErrorT (unSafeIO m)) (Mask unmask)
 {-# INLINABLE runSafeIO #-}
 
 {-| 'runSaferIO' masks asynchronous exceptions using 'Ex.uninterruptibleMask'
@@ -105,39 +179,6 @@ runSaferIO :: SafeIO e -> IO e
 runSaferIO m = Ex.uninterruptibleMask $ \unmask ->
     runReaderT (unSafeIO m) (Mask unmask)
 {-# INLINABLE runSaferIO #-}
-
-data Finalizers = Finalizers { upstream :: !(IO ()), downstream :: !(IO ()) }
-
-newtype SafeT m r = SafeT {
-    unSafeT :: ErrorT Ex.SomeException (StateT Finalizers m) r }
-
--- Deriving 'Functor'
-instance (Monad m) => Functor (SafeT m) where
-    fmap f m = SafeT (do
-        x <- unSafeT m
-        return (f x) )
-
--- Deriving 'Applicative'
-instance (Monad m) => Applicative (SafeT m) where
-    pure r    = SafeT (return r)
-    mf <*> mx = SafeT (do
-        f <- unSafeT mf
-        x <- unSafeT mx
-        return (f x) )
-
--- Deriving 'Monad'
-instance (Monad m) => Monad (SafeT m) where
-    return r = SafeT (return r)
-    m >>= f  = SafeT (unSafeT m >>= \r -> unSafeT (f r))
-
-instance MonadTrans SafeT where
-    lift m = SafeT (lift (lift m))
-
-instance MFunctor SafeT where
-    hoist f m = SafeT (hoist (hoist f) (unSafeT m))
-
-instance Error Ex.SomeException where
-    strMsg str = Ex.toException (userError str)
 
 {-| Unwrap a self-contained 'SafeP' session, running all dropped finalizers at
     the end of the computation (ordering finalizers from upstream to downstream)
@@ -157,29 +198,8 @@ runSafeP p = do
         Right r -> return r
 {-# INLINABLE runSafeP #-}
 
--- | Analogous to 'Ex.throwIO' from @Control.Exception@
-throw :: (Monad m, Ex.Exception e) => e -> Proxy a' a b' b (SafeT m) r
-throw e = hoist SafeT $ lift $ throwError (Ex.toException e)
-{-# INLINABLE throw #-}
-
--- | Analogous to 'Ex.catch' from @Control.Exception@
-catch
-    :: (Ex.Exception e, Monad m)
-    => Proxy a' a b' b (SafeT m) r         -- ^ Original computation
-    -> (e -> Proxy a' a b' b (SafeT m) r)  -- ^ Handler
-    -> Proxy a' a b' b (SafeT m) r         -- ^ Handled computation
-catch p f = hoist SafeT (hoist unSafeT p `catchError` (\someExc ->
-    case Ex.fromException someExc of
-        Nothing -> lift $ throwError someExc
-        Just e  -> hoist unSafeT (f e) ))
-{-# INLINABLE catch #-}
-
 -- | Analogous to 'Ex.handle' from @Control.Exception@
-handle
-    :: (Ex.Exception e, Monad m)
-    => (e -> Proxy a' a b' b (SafeT m) r)  -- ^ Handler
-    -> Proxy a' a b' b (SafeT m) r         -- ^ Original computation
-    -> Proxy a' a b' b (SafeT m) r         -- ^ Handled computation
+handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
 handle = flip catch
 {-# INLINABLE handle #-}
 
@@ -210,24 +230,23 @@ handle = flip catch
     consider any violations of the above laws as bugs.
 -}
 register
-    :: (Monad m)
+    :: (MonadSafe m)
     => IO ()
-    -> Proxy a' a b' b (SafeT m) r
-    -> Proxy a' a b' b (SafeT m) r
-register h k = hoist SafeT (up >\\ hoist unSafeT k //> dn)
+    -> Proxy a' a b' b m r
+    -> Proxy a' a b' b m r
+register h p = up >\\ p //> dn
   where
-    liftState = lift . lift
     dn b = do
-        old <- liftState get
-        liftState $ put $! old { upstream = (upstream old >> h) }
+        old <- getFinalizers
+        putFinalizers $ old { upstream = (upstream old >> h) }
 	b' <- respond b
-	liftState $ put $! old
+	putFinalizers old
 	return b'
     up a' = do
-        old <- liftState get
-        liftState $ put $! old { downstream = (downstream old >> h) }
+        old <- getFinalizers
+        putFinalizers $ old { downstream = (downstream old >> h) }
         a  <- request a'
-        liftState $ put $! old
+        putFinalizers old
         return a
 
 {- $check
@@ -248,23 +267,6 @@ register h k = hoist SafeT (up >\\ hoist unSafeT k //> dn)
     immediately, whereas the right-hand side delays asynchronous exceptions
     until the next 'try' or 'tryIO' block.
 -}
-
-{-| Check all exceptions for an 'IO' action, unmasking asynchronous exceptions
-
-    'try' is a monad morphism, with the same caveat as 'try'.
--}
-try :: IO r -> SafeT SafeIO r
-try io = SafeT $ do
-    restore <- lift $ lift $ SafeIO $ asks unMask
-    ErrorT $ lift $ SafeIO $ lift $ Ex.try (restore io)
-{-# INLINABLE try #-}
-
-{-| Checks all exceptions like 'tryIO', but masks asynchronous exceptions
-
-    'maskIO' is a monad morphism.
--}
-maskIO :: IO r -> SafeT SafeIO r
-maskIO io = SafeT $ ErrorT $ lift $ SafeIO $ lift $ Ex.try io
 
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
@@ -290,17 +292,17 @@ maskIO io = SafeT $ ErrorT $ lift $ SafeIO $ lift $ Ex.try io
 > onAbort morph (return ()) = id
 -}
 onAbort
-    :: IO r'                            -- ^ Action to run on abort
-    -> Proxy a' a b' b (SafeT SafeIO) r -- ^ Guarded computation
-    -> Proxy a' a b' b (SafeT SafeIO) r
+    :: (MonadSafe m)
+    => IO r'               -- ^ Action to run on abort
+    -> Proxy a' a b' b m r -- ^ Guarded computation
+    -> Proxy a' a b' b m r
 onAbort after p =
     register (after >> return ()) p
         `catch` (\e -> do
-            lift $ maskIO after
+            liftIO after
             throw (e :: Ex.SomeException) )
 {-# INLINABLE onAbort #-}
 
-{-
 {-| Analogous to 'Ex.finally' from @Control.Exception@
 
     The first argument lifts 'finally' to work with other base monads.  Use 'id'
@@ -312,14 +314,12 @@ onAbort after p =
 >     return r
 -}
 finally
-    :: (Monad m, P.Proxy p)
-    => (forall x . SafeIO x -> m x) -- ^ Monad morphism
-    -> IO r'                        -- ^ Guaranteed final action
-    -> SafeP p a' a b' b m r        -- ^ Guarded computation
-    -> SafeP p a' a b' b m r
-finally morph after p = do
-    r <- onAbort morph after p
-    hoist morph $ maskIO after
+    :: IO r'                            -- ^ Guaranteed final action
+    -> Proxy a' a b' b (SafeT SafeIO) r -- ^ Guarded computation
+    -> Proxy a' a b' b (SafeT SafeIO) r
+finally after p = do
+    r <- onAbort after p
+    lift $ maskIO after
     return r
 {-# INLINABLE finally #-}
 
