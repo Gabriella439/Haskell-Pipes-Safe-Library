@@ -54,7 +54,7 @@ import System.IO (withFile)
 > import System.IO
 > 
 > readFileS
->     :: (Proxy p) => FilePath -> () -> Producer (ExceptionP p) String SafeIO ()
+>     :: (Proxy p) => FilePath -> () -> Producer (SafeP p) String SafeIO ()
 > readFileS file () = bracket id
 >     (do h <- openFile file ReadMode
 >         putStrLn $ "{File Open}"
@@ -72,11 +72,11 @@ import System.IO (withFile)
     @readFileS@ uses 'bracket' from "Control.Proxy.Safe" to guard the file
     handle, which imposes two constraints on the type:
 
-    * 'bracket' requires the 'ExceptionP' proxy transformer in order to handle
-      exceptions
+    * 'bracket' requires the 'SafeP' proxy transformer, which stores registered
+      finalizers and checked exceptions
 
-    * 'bracket' requires 'SafeIO' as the base monad, which checks all
-      asynchronous exceptions and stores registered finalizers
+    * 'bracket' requires 'SafeIO' as the base monad, which masks all
+      asynchronous exceptions
 
     But what if we already wrote a 'Consumer' that doesn't use 'ExceptionP' or
     'SafeIO'?
@@ -90,11 +90,11 @@ import System.IO (withFile)
     all!  We can use 'try' to automatically promote any \"unmanaged\" proxy to a
     \"managed\" proxy:
 
-> try :: (CheckP p) => p a' a b' b IO r -> ExceptionP p a' a b' b SafeIO r 
+> try :: (CheckP p) => p a' a b' b IO r -> SafeP p a' a b' b SafeIO r 
 >
-> try . printer :: (CheckP p, Show a) => () -> Consumer (Exception p) a SafeIO r
+> try . printer :: (CheckP p, Show a) => () -> Consumer (SafeP p) a SafeIO r
 >
-> session :: (CheckP p) => () -> Session (Exception p) SafeIO ()
+> session :: (CheckP p) => () -> Session (SafeP p) SafeIO ()
 > session = readFileS "test.txt" >-> try . printer
 
     The 'CheckP' constraint indicates that the base 'Proxy' type must be
@@ -102,13 +102,36 @@ import System.IO (withFile)
 
     To run this 'Session', we unwrap each layer:
 
->>> runSafeIO $ runProxy $ runEitherK session :: IO ()
+> session
+>     :: () -> Session (SafeP p) SafeIO ()
+>
+> -- Run 'SafeP', executing all dropped finalizers at the end
+> runStateK id session
+>     :: () -> Session (EitherP SomeException p) SafeIO ()
+>
+> -- RUn 'EitherP', returning any checked exceptions
+> runEitherK $ runStateK id session
+>     :: () -> Session p SafeIO (Either SomeException ())
+>
+> -- Run the 'Session', compiling the pipeline to a 'SafeIO' effect
+> runProxy $ runEitherK $ runStateK id session
+>     :: SafeIO (Either SomeException ())
+>
+> -- Run 'SafeIO' executing the computation in a masked background
+> runSafeIO $ runProxy $ runEitherK $ runStateK id session
+>     :: IO (Either SomeException ())
+
+    This traverses the file and prints one line at a time, with messages marking
+    when the file opens and closes:
+
+>>> runSafeIO $ runProxy $ runEitherK $ runSafeK id session
 {File Open}
 "Line 1"
 "Line 2"
 "Line 3"
 "Line 4"
 {Closing File}
+Right ()
 
 -}
 
@@ -120,7 +143,7 @@ import System.IO (withFile)
     For example, if we only draw two lines of input, 'bracket' will still safely
     finalize the handle:
 
-> main = runSafeIO $ runProxy $ runEitherK $
+> main = runSafeIO $ runProxy $ runEitherK $ runSafeK id $
 >     readFileS "test.txt" >-> takeB_ 2 >-> try . printD
 
 >>> main
@@ -128,6 +151,7 @@ import System.IO (withFile)
 "Line 1"
 "Line 2"
 {Closing File}
+Right ()
 
     We can even sabotage ourselves by killing our own thread after a delay:
 
@@ -138,7 +162,7 @@ import System.IO (withFile)
 >     forkIO $ do
 >         threadDelay 1000
 >         killThread tID
->     runSafeIO $ runProxy $ runEitherK $
+>     runSafeIO $ runProxy $ runEitherK $ runSafeK id $
 >         foreverK (readFileS "test.txt") >-> try . printD
 
 >>> main
@@ -158,30 +182,24 @@ import System.IO (withFile)
 -}
 
 {- $native
-    Let's study the types a bit to understand what is going on:
+    @pipes-safe@ provides the 'throw' and 'catch' primitives that mirror their
+    counterparts in @Control.Exception@:
 
-> type ExceptionP = EitherP SomeException
-
-    'ExceptionP' is just a type synonym around 'EitherP'.  @pipes-safe@ uses
-    'EitherP' to check all exceptions in order to take advantage of the ability
-    to 'catch' and 'throw' exceptions locally.  In fact, "Control.Proxy.Safe"
-    defines specialized versions of 'throw' and 'catch' that mirror their
-    equivalents in @Control.Exception@:
-
-> throw :: (Monad m, Proxy p, Exception e) => e -> ExceptionP p a' a b' b m r
+> throw :: (Monad m, Proxy p, Exception e) => e -> SafeP p a' a b' b m r
 >
 > catch
 >     :: (Monad m, Proxy p, Exception e)
->     => ExceptionP p a' a b' b m r
->     -> (e -> ExceptionP p a' a b' b m r)
->     -> ExceptionP p a' a b' b m r
+>     => SafeP p a' a b' b m r
+>     -> (e -> SafeP p a' a b' b m r)
+>     -> SafeP p a' a b' b m r
 
     These let you embed native exception handling into proxies.  For example,
-    we could use exception handling to recover from a file opening error:
+    we can use exception handling to recover from a file opening error:
 
-> import Prelude hiding (catch)  -- if using `base <= 4.5`
+> import Control.Exception (IOException)
+> import Prelude hiding (catch) -- if using base <= 4.5
 >
-> openFileS :: (CheckP p) => () -> Producer (ExceptionP p) String SafeIO ()
+> openFileS :: (CheckP p) => () -> Producer (SafeP p) String SafeIO ()
 > openFileS () = (do
 >     tryIO $ putStrLn "Select a file:"
 >     file <- tryIO getLine
@@ -190,7 +208,7 @@ import System.IO (withFile)
 >       tryIO $ print (e :: IOException)
 >       openFileS () )
 
->>> runSafeIO $ runProxy $ runEitherK $ openFileS >-> try . printD
+>>> runSafeIO $ runProxy $ runEitherK $ runSafeK id $ openFileS >-> try . printD
 Select a file:
 oops
 oops: openFile: does not exist (No such file or directory)
@@ -206,8 +224,7 @@ test.txt
     You can even catch and resume from asynchronous exceptions:
 
 > heartbeat
->      :: Proxy p
->      => ExceptionP p a' a b' b SafeIO r -> ExceptionP p a' a b' b SafeIO r
+>     :: Proxy p => SafeP p a' a b' b SafeIO r -> SafeP p a' a b' b SafeIO r
 > heartbeat p = p `catch` (\e -> do
 >            let _ = e :: SomeException
 >            tryIO $ putStrLn "<Nice try!>"
@@ -218,14 +235,17 @@ test.txt
 >     forkIO $ forever $ do
 >         threadDelay 5000000  -- Every 5 seconds
 >         killThread tid
->     trySafeIO $ runProxy $ runEitherK $
+>     runSafeIO $ runProxy $ runEitherK $ runSafeK id $
 >         heartbeat . (openFileS >-> try . printD)
 
 >>> main
 Select a file:
 te<Nice Try!>
 Select a file:
-st.txt
+st.txt<Enter>
+st.txt: openFile: does not exist (No such file or directory)
+Select a file:
+test.txt
 {File Open}
 "Line 1"
 "Line 2"
@@ -236,47 +256,26 @@ st.txt
 -}
 
 {- $checked
-    Exception handling works because 'SafeIO' checks all exceptions and stores
-    them using the 'ExceptionP' proxy transformer.  'SafeIO' masks all
-    asynchronous exceptions by default and only unmasks them in the middle of a
-    'try' or 'tryIO' block.  This prevents asynchronous exceptions from leaking
-    between the cracks.
+    Exception handling works because 'SafeIO' runs the entire pipeline within a
+    masked background that only permits asynchronous exceptions within 'try' or
+    'tryIO' blocks.  This allows 'SafeP' to check all exceptions and store them
+    in an internal 'EitherP' layer (which is how it implements 'throw' and
+    'catch').  When you run 'SafeP' you gain access to this 'EitherP' layer,
+    which will hold any exception that may have been raised:
 
-    'runSafeIO' reraises the stored exception when the 'Session' completes, but
-    you can also choose to preserve the exception as a 'Left' by using
-    'trySafeIO' instead:
+> runSafeP
+>     :: (Monad m, Proxy p)
+>     => SafeP p _a' () () _b m r
+>     -> EitherP SomeException p a' a b' b m r
 
-> main = do
->     tID <- myThreadId
->     forkIO $ do
->         threadDelay 1000
->         killThread tID
->     trySafeIO $ runProxy $ runEitherK $
->         foreverK (readFileS "test.txt") >-> try . printD
-
->>> main
-...
-"Line 2"
-"Line 3"
-"Line 4"
-{Closing File}
-{File Open}
-"Line 1"
-"Line 2"
-{Closing File}
-Left thread killed
-
-    You can even choose whether to use 'mask' or 'uninterruptibleMask':
-
-    * 'runSafeIO' and 'trySafeIO' both use 'mask'
-
-    * 'runSaferIO' and 'trySaferIO' both use 'uninterruptibleMask'.
+    This is why you have to use 'runEitherK' in addition to 'runSafeK'.
 -}
 
 {- $prompt
-    Resource management primitives like 'bracket' only guarantee prompt
-    finalization in the face of exceptions.  Premature termination of
-    composition will delay the finalizer until the end of the 'Session'.
+    Resource management primitives like 'bracket' finalize immediately if they
+    terminate successfully or encounter an exception, but if another pipe
+    prematurely terminates then they will delay finalization to no later than
+    the end of the surrounding 'SafeP' block.
 
     For example, consider the following 'Session':
 

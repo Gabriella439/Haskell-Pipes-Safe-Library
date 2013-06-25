@@ -1,5 +1,5 @@
 Name: pipes-safe
-Version: 1.2.0
+Version: 2.0.0
 Cabal-Version: >=1.8.0.2
 Build-Type: Simple
 License: BSD3
@@ -16,19 +16,16 @@ Description:
     * /Resource Safety/: Guarantee finalization using @finally@, @bracket@ and
       more
     .
+    * /Exception Safety/: Even against asynchronous exceptions!
+    .
     * /Laziness/: Only acquire resources when you need them
     .
-    * /Exception safe/: Even against asynchronous exceptions!
+    * /Promptness/: Finalize resources early when you are done with them
     .
-    * /Native Exception Handling/: Catch and resume from exceptions within any
-      @Session@
+    * /Native Exception Handling/: Catch and resume from exceptions inside pipes
     .
-    * /No Buy-in/: Managed pipes play nice with unmanaged pipes
-    .
-    Import @Control.Proxy.Safe@ to use this library
-    .
-    Read @Control.Proxy.Safe.Tutorial@ for an introductory tutorial.
-Category: Control, Pipes, Proxies
+    * /No Buy-in/: Mix resource-safe pipes with unmanaged pipes using @hoist@
+Category: Control, Pipes
 Source-Repository head
     Type: git
     Location: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library
@@ -36,11 +33,9 @@ Source-Repository head
 Library
     Build-Depends:
         base         >= 4       && < 5  ,
+        mmorph       >= 1.0.0   && < 1.1,
         transformers >= 0.2.0.0 && < 0.4,
-        pipes        >= 3.2.0   && < 3.4
+        pipes        >= 4.0.0   && < 4.1
     Exposed-Modules:
-        Control.Proxy.Safe,
-        Control.Proxy.Safe.Core,
-        Control.Proxy.Safe.Prelude,
-        Control.Proxy.Safe.Tutorial
+        Pipes.Safe
     GHC-Options: -O2
