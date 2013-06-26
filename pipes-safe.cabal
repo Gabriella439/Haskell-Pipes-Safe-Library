@@ -11,7 +11,17 @@ Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
 Synopsis: Safety for the pipes ecosystem
 Description:
     This package adds resource management and exception handling to the @pipes@
-    ecosystem.  Notable features include:
+    ecosystem.
+    .
+    Use @pipes-safe@ if you need to:
+    .
+    * acquire resources in pipes and ensure prompt and deterministic release,
+    .
+    * write exception-safe @pipes@ code, or:
+    .
+    * allocate resources lazily in response to downstream demand.
+    .
+    Notable features include:
     .
     * /Resource Safety/: Guarantee finalization using @finally@, @bracket@ and
       more
@@ -25,7 +35,7 @@ Description:
     * /Native Exception Handling/: Catch and resume from exceptions inside pipes
     .
     * /No Buy-in/: Mix resource-safe pipes with unmanaged pipes using @hoist@
-Category: Control, Pipes
+Category: Control, Pipes, Error Handling
 Source-Repository head
     Type: git
     Location: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library

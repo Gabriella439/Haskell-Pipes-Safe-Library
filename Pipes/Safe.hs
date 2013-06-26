@@ -1,14 +1,62 @@
 {-| Exception handling and resource management integrated with @pipes@
 
-    If you are using @base-4.5.1.0@ or older then the @catch@ from this module
-    will conflict with @catch@ from the Prelude.  You will need to either import
-    this module qualified:
+    You should use this library if you need to:
 
-> import qualified Pipes.Safe as PS
+    * acquire resources within pipelines and guarantee deterministic cleanup,
 
-    ... or hide @catch@ from the @Prelude@:
+    * write exception-safe @pipes@ code, or:
 
-> import Prelude hiding (catch)
+    * allocate resources lazily in response to downstream demand.
+
+    Here's an example of how to use @pipes-safe@ to lazily open a file in
+    response to downstream demand and ensure that file acquisition is always
+    paired with file release:
+
+> import Control.Monad
+> import Pipes
+> import qualified Pipes.Prelude as P
+> import Pipes.Safe
+> import qualified System.IO as IO
+> 
+> readFile' :: FilePath -> () -> Producer String SafeIO ()
+> readFile' file () = bracket open close $ \h -> do
+>     let loop = do eof <- tryIO $ IO.hIsEOF h
+>                   unless eof $ do
+>                       str <- tryIO $ IO.hGetLine h
+>                       respond str
+>                       loop
+>     loop
+>   where
+>     open = do h <- IO.openFile file IO.ReadMode
+>               putStrLn "{File Open}"
+>               return h
+>     close h = do putStrLn "{Closing File}"
+>                  IO.hClose h
+> 
+> display :: Int -> Effect SafeIO ()
+> display n = (readFile' "test.txt" >-> P.take n >-> hoist tryIO . P.print) ()
+
+    Suppose that @test.txt@ has four lines:
+
+> Line 1
+> Line 2
+> Line 3
+> Line 4
+
+    The file always closes correctly even if there are exceptions or downstream
+    terminates prematurely:
+
+>>> runSafeIO $ runEffect $ display 2
+{File Open}
+"Line 1"
+"Line 2"
+{Closing File}
+
+    ... and if we demand no lines, then the file is never even opened:
+
+>>> runSafeIO $ runEffect $ display 0
+<No output>
+
 -}
 
 {-# LANGUAGE RankNTypes, CPP #-}
@@ -20,6 +68,7 @@ module Pipes.Safe (
     handle,
 
     -- * SafeIO
+    -- $safeIO
     SafeIO,
     checkSafeIO,
     checkSaferIO,
@@ -27,6 +76,7 @@ module Pipes.Safe (
     runSaferIO,
 
     -- * Finalization
+    -- $finalization
     promptly,
     onAbort,
     finally,
@@ -63,6 +113,29 @@ import Prelude hiding (catch)
 import System.IO.Error (userError)
 
 {- $monadsafe
+    Use 'MonadSafe' operations to handle and recover from exceptions or run 'IO'
+    operations with asynchronous exceptions unmasked.
+
+    'MonadSafe' requires a 'SafeIO' monad at the base of your monad transformer
+    stack.  To convert an existing  pipe from 'IO' to 'SafeIO', use
+    @(hoist tryIO)@:
+
+> P.print
+>     :: () -> Consumer String IO r
+>
+> hoist tryIO . P.print
+>     :: () -> Consumer String SafeIO r
+
+    If you are using @base-4.5.1.0@ or older then the 'catch' from this module
+    will conflict with @catch@ from the Prelude.  If you need to use 'catch'
+    then you can either import this module qualified:
+
+> import qualified Pipes.Safe as PS
+
+    ... or hide @catch@ from the @Prelude@:
+
+> import Prelude hiding (catch)
+
     This module does not export the entire 'MonadSafe' type class to protect
     internal invariants.  If you want to implement your own 'MonadSafe'
     instances then you must import 'MonadSafe' from "Pipes.Safe.Internal".
@@ -192,6 +265,21 @@ handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
 handle = flip catch
 {-# INLINABLE handle #-}
 
+{- $safeIO
+    'SafeIO' maskes all asynchronous exceptions by default and only allows you
+    unmask them in the middle of a 'tryIO' block.  This ensures that
+    @pipes-safe@ can intercept and check all asynchronous exceptions in order to
+    guarantee finalizers get run.
+
+    There is one way to subvert the safety of 'SafeIO':
+
+> hoist runSafeIO . p -- DO NOT DO THIS!
+
+    Unfortunately, there is no good way to statically prevent this without
+    greatly crippling the @mmorph@ library, so I must instead resort to a
+    strongly-worded warning.
+-}
+
 markStartingPoint :: (MonadSafe m) => m ()
 markStartingPoint = do
     Finalizers up dn <- getFinalizers
@@ -261,6 +349,38 @@ runSaferIO :: SafeIO r -> IO r
 runSaferIO sio = _rethrow (checkSaferIO sio)
 {-# INLINABLE runSaferIO #-}
 
+{- $finalization
+    Use the following functions to guarantee that finalizers are called in the
+    event of:
+
+    * Exceptions within the bracketed code block
+
+    * Exceptions in other composed pipes
+
+    * Premature termination in other composed pipes
+
+    This documentation refers to the last two cases as \"dropped\" finalizers,
+    because execution does not terminate within the bracketed code block and
+    therefore does not trigger an immediate cleanup.  These dropped finalizers
+    still guarantee that they are eventually run, but they delay running until
+    the end of the surrounding 'promptly' block or the end of the 'SafeIO'
+    monad, whichever comes first.
+
+    To guarantee prompt finalization, surround your finalization code with the
+    tightest 'promptly' block that type-checks, such as:
+
+> runSafeIO $ runEffect $ do
+>     promptly $ (p1 >-> p2) ()
+>     promptly $ (p3 >-> p4) ()
+
+    The above code runs all dropped finalizers registered within @p1@ or @p2@
+    before beginning @p3@ and @p4@.
+
+    Nested finalizers are guaranteed to be called from inside to out.  For the
+    specific case of 'bracket' this means that resources are released in reverse
+    order of acquisition.
+-}
+
 {-| @(promptly p)@ runs all dropped finalizers that @p@ registered when @p@
     completes.
 -}
@@ -314,7 +434,7 @@ register h p = up >\\ p //> dn
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
 
-    * premature termination, and
+    * premature termination from other pipe stages, and
 
     * exceptions in other pipe stages.
 
