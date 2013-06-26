@@ -31,9 +31,9 @@ data Finalizers = Finalizers
 {-| 'MonadSafe' supports exception handling and runs in a default background of
     masked asynchronous exceptions.
 
-    'liftIO' runs an action with asynchronous exceptions masked.
+    'liftIO' runs an 'IO' action with asynchronous exceptions masked.
 
-    'tryIO' runs an action with asynchronous exceptions unmasked.
+    'tryIO' runs an 'IO' action with asynchronous exceptions unmasked.
 -}
 class (MonadIO m) => MonadSafe m where
     -- | Analogous to 'Ex.throwIO' from @Control.Exception@

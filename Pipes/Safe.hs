@@ -1,9 +1,21 @@
--- | Exception handling and resource management integrated with proxies
+{-| Exception handling and resource management integrated with @pipes@
+
+    If you are using @base-4.5.1.0@ or older then the @catch@ from this module
+    will conflict with @catch@ from the Prelude.  You will need to either import
+    this module qualified:
+
+> import qualified Pipes.Safe as PS
+
+    ... or hide @catch@ from the @Prelude@:
+
+> import Prelude hiding (catch)
+-}
 
 {-# LANGUAGE RankNTypes, CPP #-}
 
 module Pipes.Safe (
     -- * MonadSafe
+    -- $monadsafe
     MonadSafe(throw, catch, tryIO),
     handle,
 
@@ -42,6 +54,12 @@ import qualified Pipes.Lift as PL
 import Prelude hiding (catch)
 #endif
 import System.IO.Error (userError)
+
+{- $monadsafe
+    This module does not export the entire 'MonadSafe' type class to protect
+    internal invariants.  If you want to implement your own 'MonadSafe'
+    instances then you must import 'MonadSafe' from "Pipes.Safe.Internal".
+-}
 
 newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
 
@@ -164,7 +182,7 @@ runSaferIO :: SafeIO r -> IO r
 runSaferIO sio = _rethrow (checkSaferIO sio)
 {-# INLINABLE runSaferIO #-}
 
-{-| @promptly p@ runs all dropped finalizers that @p@ registered when @p@
+{-| @(promptly p)@ runs all dropped finalizers that @p@ registered when @p@
     completes.
 -}
 promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
@@ -227,7 +245,7 @@ register h p = up >\\ p //> dn
 
     'onAbort' ensures finalizers are called from inside to out:
 
-> (`onAbort` fin1) . (`onAbort` fin2) = (`onAbort` (fin2 >> fin1))
+> (`onAbort` (fin2 >> fin1)) = (`onAbort` fin1) . (`onAbort` fin2)
 >
 > (`onAbort` return ()) = id
 -}
