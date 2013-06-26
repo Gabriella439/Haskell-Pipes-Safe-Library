@@ -49,8 +49,10 @@ newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
     during 'tryIO' blocks.  This ensures that all asynchronous exceptions are
     checked.
 -}
-newtype SafeIO r = SafeIO { unSafeIO
-    :: ErrorT Ex.SomeException (StateT Finalizers (ReaderT Mask IO)) r }
+newtype SafeIO r = SafeIO
+    { unSafeIO
+        :: ErrorT Ex.SomeException (StateT Finalizers (ReaderT Mask IO)) r
+    }
 
 instance Functor SafeIO where
     fmap f m = SafeIO (fmap f (unSafeIO m))
@@ -172,27 +174,19 @@ promptly = _promptly
    against premature termination.  Usually they also want to guard against
    exceptions, too.
 
-    @registerK = (register .)@ should satisfy the following laws:
+    'register' should satisfy the following laws:
 
-* 'registerK' defines a functor from finalizers to functions:
+* (register m) defines a functor from finalizers to functions:
 
-> registerK m1 . registerK m2 = registerK (m2 >> m1)
+> register m1 . register m2 = register (m2 >> m1)
 > 
-> registerK (return ()) = id
+> register (return ()) = id
 
-* 'registerK' is a functor between Kleisli categories:
+* 'register' defines a functor between Kleisli categories:
 
-> registerK m (p1 >=> p2) = registerK m p1 >=> registerK m p2
+> register m . (p1 >=> p2) = register m . p1 >=> register m . p2
 >
-> registerK m return = return
-
-    These laws are not provable using the current set of proxy laws, mainly
-    because the proxy laws do not yet specify how proxies interact with the
-    'Arrow' instance for the Kleisli category.  However, I'm reasonably sure
-    that when I do specify this interaction that the above laws will hold.
-
-    For now, just consider the above laws the contract for 'register' and
-    consider any violations of the above laws as bugs.
+> register m . return = return
 -}
 register
     :: (MonadSafe m)
