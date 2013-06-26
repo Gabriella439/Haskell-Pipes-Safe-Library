@@ -53,8 +53,8 @@ data Finalizers = Finalizers
     }
 
 {-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
-    during 'try' or 'tryIO' blocks.  This ensures that all asynchronous
-    exceptions are checked, too.
+    during 'tryIO' blocks.  This ensures that all asynchronous exceptions are
+    checked.
 -}
 newtype SafeIO r = SafeIO { unSafeIO
     :: ErrorT Ex.SomeException (StateT Finalizers (ReaderT Mask IO)) r }
@@ -167,8 +167,7 @@ _rethrow io = do
         Left  e -> Ex.throw e
         Right r -> return r
 
-{-| 'checkSafeIO' masks asynchronous exceptions using 'Ex.mask' and only unmasks
-    them during 'tryIO'.
+{-| 'checkSafeIO' masks asynchronous exceptions using 'Ex.mask'.
 
     Returns caught exceptions in a 'Left'
 -}
