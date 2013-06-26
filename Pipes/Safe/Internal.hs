@@ -20,12 +20,12 @@ import Prelude hiding (catch)
 
 {-| Finalizers that are upstream and downstream of the current proxy
 
-    'promptly' uses 'Nothing's to separate newly added finalizers from old
-    finalizers.
+    'promptly' adds new elements to the lists of stored finalizers to
+    distinguish new finalizers from old finalizers.
 -}
 data Finalizers = Finalizers
-    { upstream   :: [Maybe (IO ())]
-    , downstream :: [Maybe (IO ())]
+    { upstream   :: [IO ()]
+    , downstream :: [IO ()]
     }
 
 {-| 'MonadSafe' supports exception handling and runs in a default background of

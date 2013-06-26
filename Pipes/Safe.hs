@@ -96,7 +96,7 @@ handle = flip catch
 markStartingPoint :: (MonadSafe m) => m ()
 markStartingPoint = do
     Finalizers up dn <- getFinalizers
-    putFinalizers (Finalizers (Nothing:up) (Nothing:dn))
+    putFinalizers (Finalizers (return ():up) (return ():dn))
 
 newFinalizers :: (MonadSafe m) => m (IO (), IO ())
 newFinalizers = do
@@ -106,11 +106,9 @@ newFinalizers = do
     putFinalizers (Finalizers ups' dns')
     return (newUps, newDns)
   where
-    new = go []
-    go as mas = case mas of
-        []           -> (sequence_ (reverse as), []  )
-        Nothing:mas' -> (sequence_ (reverse as), mas')
-        Just a :mas' -> go (a:as) mas'
+    new fins = case fins of
+        []   -> (return (), [])
+        a:as -> (a        , as)
 
 _promptly :: (MonadSafe m) => m r -> m r
 _promptly m = do
@@ -205,16 +203,19 @@ register h p = up >\\ p //> dn
   where
     dn b = do
         old <- getFinalizers
-        putFinalizers $ old { upstream = Just h:upstream old }
+        putFinalizers $ old { upstream = add h (upstream old) }
 	b' <- respond b
 	putFinalizers old
 	return b'
     up a' = do
         old <- getFinalizers
-        putFinalizers $ old { downstream = Just h:downstream old }
+        putFinalizers $ old { downstream = add h (downstream old) }
         a  <- request a'
         putFinalizers old
         return a
+    add h old = case old of
+        []       -> []
+        fin:fins -> (fin >> h):fins
 
 {-| Similar to 'Ex.onException' from @Control.Exception@, except this also
     protects against:
