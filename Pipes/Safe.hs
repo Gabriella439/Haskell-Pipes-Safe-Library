@@ -117,8 +117,8 @@ import System.IO.Error (userError)
     operations with asynchronous exceptions unmasked.
 
     'MonadSafe' requires a 'SafeIO' monad at the base of your monad transformer
-    stack.  To convert an existing  pipe from 'IO' to 'SafeIO', use
-    @(hoist tryIO)@:
+    stack.  Use @(hoist tryIO)@ to convert an existing  pipe from 'IO' to
+    'SafeIO':
 
 > P.print
 >     :: () -> Consumer String IO r
@@ -137,8 +137,8 @@ import System.IO.Error (userError)
 > import Prelude hiding (catch)
 
     This module does not export the entire 'MonadSafe' type class to protect
-    internal invariants.  If you want to implement your own 'MonadSafe'
-    instances then you must import 'MonadSafe' from "Pipes.Safe.Internal".
+    internal invariants.  Import 'MonadSafe' from "Pipes.Safe.Internal" if you
+    want to implement your own 'MonadSafe' instances.
 -}
 
 newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
