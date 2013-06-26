@@ -42,10 +42,17 @@ import qualified Control.Exception as Ex
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Morph (MFunctor(hoist))
 import Control.Monad.Trans.Class (MonadTrans(lift))
-import Control.Monad.Trans.Error (
-    ErrorT(ErrorT, runErrorT), Error(noMsg, strMsg), throwError, catchError )
-import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
-import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
+import qualified Control.Monad.Trans.Error         as E
+import qualified Control.Monad.Trans.Identity      as I
+import qualified Control.Monad.Trans.Maybe         as M
+import qualified Control.Monad.Trans.RWS.Lazy      as RWS
+import qualified Control.Monad.Trans.RWS.Strict    as RWS'
+import qualified Control.Monad.Trans.Reader        as R
+import qualified Control.Monad.Trans.State.Lazy    as S 
+import qualified Control.Monad.Trans.State.Strict  as S'
+import qualified Control.Monad.Trans.Writer.Lazy   as W 
+import qualified Control.Monad.Trans.Writer.Strict as W'
+import Data.Monoid (Monoid)
 import Pipes
 import Pipes.Safe.Internal
 import qualified Pipes.Lift as PL
@@ -69,7 +76,9 @@ newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
 -}
 newtype SafeIO r = SafeIO
     { unSafeIO
-        :: ErrorT Ex.SomeException (StateT Finalizers (ReaderT Mask IO)) r
+        :: E.ErrorT Ex.SomeException (
+           S'.StateT Finalizers (
+           R.ReaderT Mask IO )) r
     }
 
 instance Functor SafeIO where
@@ -83,23 +92,93 @@ instance Monad SafeIO where
     return r = SafeIO (return r)
     m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
 
-instance Error Ex.SomeException where
+instance E.Error Ex.SomeException where
     strMsg str = Ex.toException (userError str)
 
 instance MonadIO SafeIO where
-    liftIO io = SafeIO $ ErrorT $ lift $ lift $ Ex.try io
+    liftIO io = SafeIO $ E.ErrorT $ lift $ lift $ Ex.try io
 
 instance MonadSafe SafeIO where
-    throw e = SafeIO $ throwError (Ex.toException e)
-    catch m f = SafeIO $ unSafeIO m `catchError` (\someExc ->
+    throw e = SafeIO $ E.throwError (Ex.toException e)
+    catch m f = SafeIO $ unSafeIO m `E.catchError` (\someExc ->
         case Ex.fromException someExc of
-            Nothing -> throwError someExc
+            Nothing -> E.throwError someExc
             Just e  -> unSafeIO (f e) )
-    tryIO  io = SafeIO $ ErrorT $ lift $ do
-        restore <- asks unMask
+    tryIO  io = SafeIO $ E.ErrorT $ lift $ do
+        restore <- R.asks unMask
         lift $ Ex.try (restore io)
-    getFinalizers = SafeIO $ lift get
-    putFinalizers finalizers = SafeIO $ lift $ put finalizers
+    getFinalizers = SafeIO $ lift S'.get
+    putFinalizers finalizers = SafeIO $ lift $ S'.put finalizers
+
+instance (MonadSafe m, E.Error e) => MonadSafe (E.ErrorT e m) where
+    throw = lift . throw
+    catch m f = E.ErrorT (catch (E.runErrorT m) (\e -> E.runErrorT (f e)))
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m) => MonadSafe (I.IdentityT m) where
+    throw = lift . throw
+    catch = I.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m) => MonadSafe (M.MaybeT m) where
+    throw = lift . throw
+    catch = M.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m, Monoid w) => MonadSafe (RWS.RWST r w s m) where
+    throw = lift . throw
+    catch = RWS.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST r w s m) where
+    throw = lift . throw
+    catch = RWS'.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m) => MonadSafe (R.ReaderT i m) where
+    throw = lift . throw
+    catch = R.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m) => MonadSafe (S.StateT s m) where
+    throw = lift . throw
+    catch = S.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m) => MonadSafe (S'.StateT s m) where
+    throw = lift . throw
+    catch = S'.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m, Monoid w) => MonadSafe (W.WriterT w m) where
+    throw = lift . throw
+    catch = W.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
+
+instance (MonadSafe m, Monoid w) => MonadSafe (W'.WriterT w m) where
+    throw = lift . throw
+    catch = W'.liftCatch catch
+    tryIO = lift . tryIO
+    getFinalizers = lift getFinalizers
+    putFinalizers = lift . putFinalizers
 
 instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
     throw = lift . throw
@@ -147,7 +226,7 @@ _tryWith
     -> SafeIO r
     -> IO (Either Ex.SomeException r)
 _tryWith mask sio = mask $ \restore ->
-    runReaderT (evalStateT (runErrorT (unSafeIO sio0)) s0) (Mask restore)
+    R.runReaderT (S'.evalStateT (E.runErrorT (unSafeIO sio0)) s0) (Mask restore)
   where
     sio0 = _promptly sio
     s0   = Finalizers [] []
