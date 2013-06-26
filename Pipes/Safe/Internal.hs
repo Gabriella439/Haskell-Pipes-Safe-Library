@@ -1,3 +1,9 @@
+{-| The full 'MonadSafe' is internal to avoid unsafe use of 'getFinalizers'
+    and 'putFinalizers' to tamper with the registered finalizers.  You should
+    only import this module if you want to define your own 'MonadSafe'
+    instances.
+-}
+
 {-# LANGUAGE CPP #-}
 
 module Pipes.Safe.Internal (
@@ -7,12 +13,16 @@ module Pipes.Safe.Internal (
 
 import qualified Control.Exception as Ex
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import Pipes (Proxy, lift)
 #if MIN_VERSION_base(4,6,0)
 #else
 import Prelude hiding (catch)
 #endif
 
+{-| Finalizers that are upstream and downstream of the current proxy
+
+    'promptly' uses 'Nothing's to separate newly added finalizers from old
+    finalizers.
+-}
 data Finalizers = Finalizers
     { upstream   :: [Maybe (IO ())]
     , downstream :: [Maybe (IO ())]
