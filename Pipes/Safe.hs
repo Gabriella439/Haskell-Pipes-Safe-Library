@@ -23,13 +23,6 @@ module Pipes.Safe (
     bracketOnAbort,
     ) where
 
-import Prelude hiding (
-#if MIN_VERSION_base(4,6,0)
-#else
-    catch,
-#endif
-    readFile, writeFile
-    )
 import qualified System.IO as IO
 
 import Control.Applicative (Applicative(pure, (<*>)), (<*))
@@ -42,15 +35,15 @@ import Control.Monad.Trans.Error (
 import Control.Monad.Trans.Reader (ReaderT(ReaderT, runReaderT), asks)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import Pipes
+import Pipes.Safe.Internal
 import qualified Pipes.Lift as PL
+#if MIN_VERSION_base(4,6,0)
+#else
+import Prelude hiding (catch)
+#endif
 import System.IO.Error (userError)
 
 newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
-
-data Finalizers = Finalizers
-    { upstream   :: [Maybe (IO ())]
-    , downstream :: [Maybe (IO ())]
-    }
 
 {-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
     during 'tryIO' blocks.  This ensures that all asynchronous exceptions are
@@ -73,30 +66,6 @@ instance Monad SafeIO where
 instance Error Ex.SomeException where
     strMsg str = Ex.toException (userError str)
 
-{-| 'MonadSafe' supports exception handling and runs in a default background of
-    masked asynchronous exceptions.
-
-    'liftIO' runs an action with asynchronous exceptions masked.
-
-    'tryIO' runs an action with asynchronous exceptions unmasked.
--}
-class (MonadIO m) => MonadSafe m where
-    -- | Analogous to 'Ex.throwIO' from @Control.Exception@
-    throw :: (Ex.Exception e) => e -> m r
-    -- | Analogous to 'Ex.catch' from @Control.Exception@
-    catch :: (Ex.Exception e) => m r -> (e -> m r) -> m r
-    {-| Check all exceptions for an 'IO' action, unmasking asynchronous
-        exceptions
-    -}
-    tryIO :: IO r -> m r
-    getFinalizers :: m Finalizers
-    putFinalizers :: Finalizers -> m ()
-
--- | Analogous to 'Ex.handle' from @Control.Exception@
-handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
-handle = flip catch
-{-# INLINABLE handle #-}
-
 instance MonadIO SafeIO where
     liftIO io = SafeIO $ ErrorT $ lift $ lift $ Ex.try io
 
@@ -118,6 +87,11 @@ instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
     tryIO = lift . tryIO
     getFinalizers = lift getFinalizers
     putFinalizers = lift . putFinalizers
+
+-- | Analogous to 'Ex.handle' from @Control.Exception@
+handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
+handle = flip catch
+{-# INLINABLE handle #-}
 
 markStartingPoint :: (MonadSafe m) => m ()
 markStartingPoint = do

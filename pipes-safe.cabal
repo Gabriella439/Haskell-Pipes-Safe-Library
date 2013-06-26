@@ -37,5 +37,6 @@ Library
         transformers >= 0.2.0.0 && < 0.4,
         pipes        >= 4.0.0   && < 4.1
     Exposed-Modules:
-        Pipes.Safe
+        Pipes.Safe,
+        Pipes.Safe.Internal
     GHC-Options: -O2
