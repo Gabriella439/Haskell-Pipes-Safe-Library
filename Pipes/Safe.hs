@@ -264,8 +264,11 @@ runSaferIO sio = _rethrow (checkSaferIO sio)
 {-| @(promptly p)@ runs all dropped finalizers that @p@ registered when @p@
     completes.
 -}
-promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
-promptly = _promptly
+promptly :: (MonadSafe m) => Effect' m r -> Effect m r
+promptly m = up >\\ _promptly m //> dn
+  where
+    up _ = return ()
+    dn _ = return ()
 
 {- I don't export 'register' only because people rarely want to guard solely
    against premature termination.  Usually they also want to guard against
