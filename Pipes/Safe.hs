@@ -13,24 +13,14 @@ module Pipes.Safe (
     checkSaferIO,
     runSafeIO,
     runSaferIO,
-    promptly,
 
     -- * Finalization
+    promptly,
     onAbort,
     finally,
     bracket,
     bracket_,
     bracketOnAbort,
-
-    -- * Utilities
-
-    -- ** Handle allocation
-    withFile,
-
-    -- ** String I/O
-    -- $string
-    readFile,
-    writeFile
     ) where
 
 import Prelude hiding (
@@ -83,6 +73,13 @@ instance Monad SafeIO where
 instance Error Ex.SomeException where
     strMsg str = Ex.toException (userError str)
 
+{-| 'MonadSafe' supports exception handling and runs in a default background of
+    masked asynchronous exceptions.
+
+    'liftIO' runs an action with asynchronous exceptions masked.
+
+    'tryIO' runs an action with asynchronous exceptions unmasked.
+-}
 class (MonadIO m) => MonadSafe m where
     -- | Analogous to 'Ex.throwIO' from @Control.Exception@
     throw :: (Ex.Exception e) => e -> m r
@@ -349,45 +346,3 @@ bracketOnAbort before after p = do
     h <- liftIO before
     p h `onAbort` after h
 {-# INLINABLE bracketOnAbort #-}
-
--- | Safely allocate a 'IO.Handle' within a managed 'Proxy'
-withFile
-    :: (MonadSafe m)
-    => FilePath
-    -> IO.IOMode
-    -> (IO.Handle -> Proxy a' a b' b m r)
-    -> Proxy a' a b' b m r
-withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
-{-# INLINABLE withFile #-}
-
-{- $string
-    Note that 'String's are very inefficient, and I will release future separate
-    packages with 'ByteString' and 'Text' operations.  I only provide these to
-    allow users to test simple I/O without requiring any additional library
-    dependencies.
--}
-
-{-| Read from a file, lazily opening the 'IO.Handle' and automatically closing
-    it afterwards
--}
-readFile :: FilePath -> () -> Producer String SafeIO ()
-readFile file () = withFile file IO.ReadMode $ \handle -> do
-    let go = do
-            eof <- tryIO $ IO.hIsEOF handle
-            if eof
-                then return ()
-                else do
-                    str <- tryIO $ IO.hGetLine handle
-                    respond str
-                    go
-    go
-{-# INLINABLE readFile #-}
-
-{-| Write to a file, lazily opening the 'IO.Handle' and automatically closing it
-    afterwards
--}
-writeFile :: FilePath -> () -> Consumer String SafeIO r
-writeFile file () = withFile file IO.WriteMode $ \handle -> forever $ do
-    str <- request ()
-    tryIO $ IO.hPutStrLn handle str
-{-# INLINABLE writeFile #-}
