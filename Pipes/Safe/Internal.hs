@@ -1,7 +1,7 @@
-{-| The full 'MonadSafe' is internal to avoid unsafe use of 'getFinalizers'
-    and 'putFinalizers' to tamper with the registered finalizers.  You should
-    only import this module if you want to define your own 'MonadSafe'
-    instances.
+{-| I keep the full 'MonadSafe' type class internal to prevent unsafe use of
+    'getFinalizers' and 'putFinalizers', which can tamper with registered
+    finalizers.  You should only import this module if you want to define your
+    own 'MonadSafe' instances.
 -}
 
 {-# LANGUAGE CPP #-}
