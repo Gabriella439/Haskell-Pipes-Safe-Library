@@ -197,7 +197,7 @@ runSaferIO sio = _rethrow (checkSaferIO sio)
 {-| @promptly p@ runs all dropped finalizers that @p@ registered when @p@
     completes.
 -}
-promptly :: (MonadSafe m) => Effect' m r -> Effect' m r
+promptly :: (MonadSafe m) => Proxy x' x y' y m r -> Proxy x' x y' y m r
 promptly = _promptly
 
 {- I don't export 'register' only because people rarely want to guard solely
@@ -209,7 +209,7 @@ promptly = _promptly
 * 'registerK' defines a functor from finalizers to functions:
 
 > registerK m1 . registerK m2 = registerK (m2 >> m1)
-> 
+>
 > registerK (return ()) = id
 
 * 'registerK' is a functor between Kleisli categories:
