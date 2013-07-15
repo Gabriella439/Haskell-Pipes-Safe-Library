@@ -83,6 +83,10 @@ module Pipes.Safe (
     bracket,
     bracket_,
     bracketOnAbort,
+
+    -- * Re-exports
+    -- $re-exports
+    module Control.Monad.IO.Class
     ) where
 
 import qualified System.IO as IO
@@ -534,3 +538,8 @@ bracketOnAbort before after p = do
     h <- liftIO before
     p h `onAbort` after h
 {-# INLINABLE bracketOnAbort #-}
+
+{- $re-exports
+
+    @Control.Monad.IO.Class@ re-exports 'MonadIO'
+-}
