@@ -17,13 +17,13 @@
 > import qualified Pipes.Prelude as P
 > import Pipes.Safe
 > import qualified System.IO as IO
-> 
+>
 > readFile' :: FilePath -> () -> Producer String SafeIO ()
 > readFile' file () = bracket open close $ \h -> do
 >     let loop = do eof <- tryIO $ IO.hIsEOF h
 >                   unless eof $ do
 >                       str <- tryIO $ IO.hGetLine h
->                       respond str
+>                       yield str
 >                       loop
 >     loop
 >   where
@@ -32,7 +32,7 @@
 >               return h
 >     close h = do putStrLn "{Closing File}"
 >                  IO.hClose h
-> 
+>
 > display :: Int -> Effect SafeIO ()
 > display n = (readFile' "test.txt" >-> P.take n >-> hoist tryIO . P.print) ()
 
@@ -102,9 +102,9 @@ import qualified Control.Monad.Trans.Maybe         as M
 import qualified Control.Monad.Trans.RWS.Lazy      as RWS
 import qualified Control.Monad.Trans.RWS.Strict    as RWS'
 import qualified Control.Monad.Trans.Reader        as R
-import qualified Control.Monad.Trans.State.Lazy    as S 
+import qualified Control.Monad.Trans.State.Lazy    as S
 import qualified Control.Monad.Trans.State.Strict  as S'
-import qualified Control.Monad.Trans.Writer.Lazy   as W 
+import qualified Control.Monad.Trans.Writer.Lazy   as W
 import qualified Control.Monad.Trans.Writer.Strict as W'
 import Data.Monoid (Monoid)
 import Pipes
@@ -403,7 +403,7 @@ promptly m = up >\\ _promptly m //> dn
 * (register m) defines a functor from finalizers to functions:
 
 > register m1 . register m2 = register (m2 >> m1)
-> 
+>
 > register (return ()) = id
 
 * 'register' defines a functor between Kleisli categories:
@@ -422,13 +422,13 @@ register h p = up >\\ p //> dn
     dn b = do
         old <- getFinalizers
         putFinalizers $ old { upstream = add h (upstream old) }
-	b' <- respond b
+	b' <- yield b
 	putFinalizers old
 	return b'
     up a' = do
         old <- getFinalizers
         putFinalizers $ old { downstream = add h (downstream old) }
-        a  <- request a'
+        a  <- await a'
         putFinalizers old
         return a
     add h old = case old of
