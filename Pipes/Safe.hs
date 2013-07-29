@@ -107,7 +107,7 @@ import qualified Control.Monad.Trans.State.Strict  as S'
 import qualified Control.Monad.Trans.Writer.Lazy   as W
 import qualified Control.Monad.Trans.Writer.Strict as W'
 import Data.Monoid (Monoid)
-import Pipes
+import Pipes.Core
 import Pipes.Safe.Internal
 import qualified Pipes.Lift as PL
 #if MIN_VERSION_base(4,6,0)
@@ -389,7 +389,7 @@ runSaferIO sio = _rethrow (checkSaferIO sio)
     completes.
 -}
 promptly :: (MonadSafe m) => Effect' m r -> Effect m r
-promptly m = up >\\ _promptly m //> dn
+promptly m = up >\\ promptly m //> dn
   where
     up _ = return ()
     dn _ = return ()
@@ -422,13 +422,13 @@ register h p = up >\\ p //> dn
     dn b = do
         old <- getFinalizers
         putFinalizers $ old { upstream = add h (upstream old) }
-	b' <- yield b
+	b' <- respond b
 	putFinalizers old
 	return b'
     up a' = do
         old <- getFinalizers
         putFinalizers $ old { downstream = add h (downstream old) }
-        a  <- await a'
+        a  <- request a'
         putFinalizers old
         return a
     add h old = case old of
