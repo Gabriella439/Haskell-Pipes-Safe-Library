@@ -1,545 +1,228 @@
-{-| Exception handling and resource management integrated with @pipes@
+{-# LANGUAGE RankNTypes #-}
 
-    You should use this library if you need to:
-
-    * acquire resources within pipelines and guarantee deterministic cleanup,
-
-    * write exception-safe @pipes@ code, or:
-
-    * allocate resources lazily in response to downstream demand.
-
-    Here's an example of how to use @pipes-safe@ to lazily open a file in
-    response to downstream demand and ensure that file acquisition is always
-    paired with file release:
-
-> import Control.Monad
-> import Pipes
-> import qualified Pipes.Prelude as P
-> import Pipes.Safe
-> import qualified System.IO as IO
->
-> readFile' :: FilePath -> () -> Producer String SafeIO ()
-> readFile' file () = bracket open close $ \h -> do
->     let loop = do eof <- tryIO $ IO.hIsEOF h
->                   unless eof $ do
->                       str <- tryIO $ IO.hGetLine h
->                       yield str
->                       loop
->     loop
->   where
->     open = do h <- IO.openFile file IO.ReadMode
->               putStrLn "{File Open}"
->               return h
->     close h = do putStrLn "{Closing File}"
->                  IO.hClose h
->
-> display :: Int -> Effect SafeIO ()
-> display n = (readFile' "test.txt" >-> P.take n >-> hoist tryIO . P.print) ()
-
-    Suppose that @test.txt@ has four lines:
-
-> Line 1
-> Line 2
-> Line 3
-> Line 4
-
-    The file always closes correctly even if there are exceptions or downstream
-    terminates prematurely:
-
->>> runSafeIO $ runEffect $ display 2
-{File Open}
-"Line 1"
-"Line 2"
-{Closing File}
-
-    ... and if we demand no lines, then the file is never even opened:
-
->>> runSafeIO $ runEffect $ display 0
-<No output>
-
--}
-
-{-# LANGUAGE RankNTypes, CPP #-}
-
-module Pipes.Safe (
-    -- * MonadSafe
-    -- $monadsafe
-    MonadSafe(throw, catch, tryIO),
-    handle,
-
-    -- * SafeIO
-    -- $safeIO
-    SafeIO,
-    checkSafeIO,
-    checkSaferIO,
-    runSafeIO,
-    runSaferIO,
-
-    -- * Finalization
-    -- $finalization
-    promptly,
-    onAbort,
-    finally,
-    bracket,
-    bracket_,
-    bracketOnAbort,
+module Pipes.Safe
+    ( -- * SafeT
+      SafeT(..)
+    , runSafeT
+    , runSafeP
+    , ReleaseKey
+    , MonadSafe(..)
 
     -- * Re-exports
-    -- $re-exports
-    module Control.Monad.IO.Class
+
     ) where
 
-import qualified System.IO as IO
-
-import Control.Applicative (Applicative(pure, (<*>)), (<*))
-import qualified Control.Exception as Ex
+import Control.Applicative (Applicative(pure, (<*>)))
+import qualified Control.Monad.Catch as C
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import Control.Monad.Morph (MFunctor(hoist))
 import Control.Monad.Trans.Class (MonadTrans(lift))
-import qualified Control.Monad.Trans.Error         as E
+import qualified Control.Monad.Catch.Pure          as E
 import qualified Control.Monad.Trans.Identity      as I
-import qualified Control.Monad.Trans.Maybe         as M
+import qualified Control.Monad.Trans.Reader        as R
 import qualified Control.Monad.Trans.RWS.Lazy      as RWS
 import qualified Control.Monad.Trans.RWS.Strict    as RWS'
-import qualified Control.Monad.Trans.Reader        as R
 import qualified Control.Monad.Trans.State.Lazy    as S
 import qualified Control.Monad.Trans.State.Strict  as S'
 import qualified Control.Monad.Trans.Writer.Lazy   as W
 import qualified Control.Monad.Trans.Writer.Strict as W'
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import qualified Data.Map as M
 import Data.Monoid (Monoid)
-import Pipes.Core
-import Pipes.Safe.Internal
-import qualified Pipes.Lift as PL
-#if MIN_VERSION_base(4,6,0)
-#else
-import Prelude hiding (catch)
-#endif
-import System.IO.Error (userError)
+import Pipes (Proxy, Effect)
+import Pipes.Internal (unsafeHoist, Proxy(..))
+import Pipes.Lift (liftCatchError, runReaderP)
 
-{- $monadsafe
-    Use 'MonadSafe' operations to handle and recover from exceptions or run 'IO'
-    operations with asynchronous exceptions unmasked.
+-- TODO: Decide on re-exports from Control.Monad.Catch
+-- TODO: Get bounds on dependencies correct
+-- TODO: Add haddocks
 
-    'MonadSafe' requires a 'SafeIO' monad at the base of your monad transformer
-    stack.  Use @(hoist tryIO)@ to convert an existing  pipe from 'IO' to
-    'SafeIO':
+data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
-> P.print
->     :: () -> Consumer String IO r
->
-> hoist tryIO . P.print
->     :: () -> Consumer String SafeIO r
+liftMask
+    :: (MonadIO m, C.MonadCatch m)
+    => (forall s . ((forall x . m x -> m x) -> m s) -> m s)
+    -> ((forall x . Proxy a' a b' b m x -> Proxy a' a b' b m x)
+        -> Proxy a' a b' b m r)
+    -> Proxy a' a b' b m r
+liftMask mask_ k = do
+        ioref <- liftIO (newIORef Unmasked)
+        let unmask p = do
+                mRestore <- liftIO (readIORef ioref)
+                case mRestore of
+                    Unmasked       -> p
+                    Masked restore -> do
+                        r <- unsafeHoist restore p
+                        lift $ restore $ return ()
+                        return r
+            loop p = case p of
+                Request a' fa  -> Request a' (loop . fa )
+                Respond b  fb' -> Respond b  (loop . fb')
+                M m            -> M $ mask_ $ \restore -> do
+                    liftIO $ writeIORef ioref (Masked restore)
+                    let loop' m = do
+                            p' <- m
+                            case p' of
+                                M m' -> loop' m'
+                                _    -> return p'
+                    p' <- loop' m
+                    liftIO $ writeIORef ioref  Unmasked
+                    return (loop p')
+                Pure r         -> Pure r
+        loop (k unmask)
 
-    If you are using @base-4.5.1.0@ or older then the 'catch' from this module
-    will conflict with @catch@ from the Prelude.  If you need to use 'catch'
-    then you can either import this module qualified:
+instance (C.MonadCatch m, MonadIO m) => C.MonadCatch (Proxy a' a b' b m) where
+    throwM = lift . C.throwM
+    catch  = liftCatchError C.catch
+    mask                = liftMask C.mask
+    uninterruptibleMask = liftMask C.uninterruptibleMask
 
-> import qualified Pipes.Safe as PS
-
-    ... or hide @catch@ from the @Prelude@:
-
-> import Prelude hiding (catch)
-
-    This module does not export the entire 'MonadSafe' type class to protect
-    internal invariants.  Import 'MonadSafe' from "Pipes.Safe.Internal" if you
-    want to implement your own 'MonadSafe' instances.
--}
-
-newtype Mask = Mask { unMask :: forall a . IO a -> IO a }
-
-{-| 'SafeIO' masks asynchronous exceptions by default and only unmasks them
-    during 'tryIO' blocks.  This ensures that all asynchronous exceptions are
-    checked.
--}
-newtype SafeIO r = SafeIO
-    { unSafeIO
-        :: E.ErrorT Ex.SomeException (
-           S'.StateT Finalizers (
-           R.ReaderT Mask IO )) r
+data Finalizers m = Finalizers
+    { nextKey    :: !Integer
+    , finalizers :: !(M.Map Integer (m ()))
     }
 
-instance Functor SafeIO where
-    fmap f m = SafeIO (fmap f (unSafeIO m))
+newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Finalizers m)) m r }
 
-instance Applicative SafeIO where
-    pure r  = SafeIO (pure r)
-    f <*> x = SafeIO (unSafeIO f <*> unSafeIO x)
+-- Deriving 'Functor'
+instance (Monad m) => Functor (SafeT m) where
+    fmap f m = SafeT (do
+        r <- unSafeT m
+        return (f r) )
 
-instance Monad SafeIO where
-    return r = SafeIO (return r)
-    m >>= f  = SafeIO (unSafeIO m >>= \a -> unSafeIO (f a))
+-- Deriving 'Applicative'
+instance (Monad m) => Applicative (SafeT m) where
+    pure r = SafeT (return r)
+    mf <*> mx = SafeT (do
+        f <- unSafeT mf
+        x <- unSafeT mx
+        return (f x) )
 
-instance E.Error Ex.SomeException where
-    strMsg str = Ex.toException (userError str)
+-- Deriving 'Monad'
+instance (Monad m) => Monad (SafeT m) where
+    return r = SafeT (return r)
+    m >>= f = SafeT (do
+        r <- unSafeT m
+        unSafeT (f r) )
 
-instance MonadIO SafeIO where
-    liftIO io = SafeIO $ E.ErrorT $ lift $ lift $ Ex.try io
+-- Deriving 'MonadIO'
+instance (MonadIO m) => MonadIO (SafeT m) where
+    liftIO m = SafeT (liftIO m)
 
-instance MonadSafe SafeIO where
-    throw e = SafeIO $ E.throwError (Ex.toException e)
-    catch m f = SafeIO $ unSafeIO m `E.catchError` (\someExc ->
-        case Ex.fromException someExc of
-            Nothing -> E.throwError someExc
-            Just e  -> unSafeIO (f e) )
-    tryIO  io = SafeIO $ E.ErrorT $ lift $ do
-        restore <- R.asks unMask
-        lift $ Ex.try (restore io)
-    getFinalizers = SafeIO $ lift S'.get
-    putFinalizers finalizers = SafeIO $ lift $ S'.put finalizers
+-- Deriving 'MonadCatch'
+instance (C.MonadCatch m) => C.MonadCatch (SafeT m) where
+    throwM e = SafeT (C.throwM e)
+    m `catch` f = SafeT (unSafeT m `C.catch` \r -> unSafeT (f r))
+    mask k = SafeT (C.mask (\restore ->
+        unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
+    uninterruptibleMask k = SafeT (C.uninterruptibleMask (\restore ->
+        unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
 
-instance (MonadSafe m, E.Error e) => MonadSafe (E.ErrorT e m) where
-    throw = lift . throw
-    catch m f = E.ErrorT (catch (E.runErrorT m) (\e -> E.runErrorT (f e)))
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+instance MonadTrans SafeT where
+    lift m = SafeT (lift m)
 
-instance (MonadSafe m) => MonadSafe (I.IdentityT m) where
-    throw = lift . throw
-    catch = I.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+runSafeT :: (C.MonadCatch m, MonadIO m) => SafeT m r -> m r
+runSafeT m = C.bracket
+    (liftIO $ newIORef $! Finalizers 0 M.empty)
+    (\ioref -> do
+        Finalizers _ fs <- liftIO (readIORef ioref)
+        mapM snd (M.toDescList fs) )
+    (R.runReaderT (unSafeT m))
+{-# INLINABLE runSafeT #-}
 
-instance (MonadSafe m) => MonadSafe (M.MaybeT m) where
-    throw = lift . throw
-    catch = M.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+runSafeP :: (C.MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect m r
+runSafeP m = C.bracket
+    (liftIO $ newIORef $! Finalizers 0 M.empty)
+    (\ioref -> do
+        Finalizers _ fs <- liftIO (readIORef ioref)
+        lift $ mapM snd (M.toDescList fs) )
+    (\ioref -> runReaderP ioref (unsafeHoist unSafeT m))
+{-# INLINABLE runSafeP #-}
 
-instance (MonadSafe m, Monoid w) => MonadSafe (RWS.RWST r w s m) where
-    throw = lift . throw
-    catch = RWS.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
-instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST r w s m) where
-    throw = lift . throw
-    catch = RWS'.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+class (C.MonadCatch m, MonadIO m) => MonadSafe m where
+    register :: IO () -> m ReleaseKey
+    release  :: ReleaseKey -> m ()
 
-instance (MonadSafe m) => MonadSafe (R.ReaderT i m) where
-    throw = lift . throw
-    catch = R.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
-
-instance (MonadSafe m) => MonadSafe (S.StateT s m) where
-    throw = lift . throw
-    catch = S.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
-
-instance (MonadSafe m) => MonadSafe (S'.StateT s m) where
-    throw = lift . throw
-    catch = S'.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
-
-instance (MonadSafe m, Monoid w) => MonadSafe (W.WriterT w m) where
-    throw = lift . throw
-    catch = W.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
-
-instance (MonadSafe m, Monoid w) => MonadSafe (W'.WriterT w m) where
-    throw = lift . throw
-    catch = W'.liftCatch catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+instance (MonadIO m, C.MonadCatch m) => MonadSafe (SafeT m) where
+    register io = do
+        ioref <- SafeT R.ask
+        liftIO $ do
+            Finalizers n fs <- readIORef ioref
+            writeIORef ioref $! Finalizers (n + 1) (M.insert n (liftIO io) fs)
+            return (ReleaseKey n)
+    release key = do
+        ioref <- SafeT R.ask
+        liftIO $ do
+            Finalizers n fs <- readIORef ioref
+            writeIORef ioref $! Finalizers n (M.delete (unlock key) fs)
 
 instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
-    throw = lift . throw
-    catch = PL.liftCatchError catch
-    tryIO = lift . tryIO
-    getFinalizers = lift getFinalizers
-    putFinalizers = lift . putFinalizers
+    register = lift . register
+    release  = lift . release
 
--- | Analogous to 'Ex.handle' from @Control.Exception@
-handle :: (Ex.Exception e, MonadSafe m) => (e -> m r) -> m r -> m r
-handle = flip catch
-{-# INLINABLE handle #-}
+instance (MonadSafe m) => MonadSafe (I.IdentityT m) where
+    register = lift . register
+    release  = lift . release
 
-{- $safeIO
-    'SafeIO' maskes all asynchronous exceptions by default and only allows you
-    unmask them in the middle of a 'tryIO' block.  This ensures that
-    @pipes-safe@ can intercept and check all asynchronous exceptions in order to
-    guarantee finalizers get run.
+instance (MonadSafe m) => MonadSafe (E.CatchT m) where
+    register = lift . register
+    release  = lift . release
 
-    There is one way to subvert the safety of 'SafeIO':
+instance (MonadSafe m) => MonadSafe (R.ReaderT i m) where
+    register = lift . register
+    release  = lift . release
 
-> hoist runSafeIO . p -- DO NOT DO THIS!
+instance (MonadSafe m) => MonadSafe (S.StateT s m) where
+    register = lift . register
+    release  = lift . release
 
-    Unfortunately, there is no good way to statically prevent this without
-    greatly crippling the @mmorph@ library, so I must instead resort to a
-    strongly-worded warning.
--}
+instance (MonadSafe m) => MonadSafe (S'.StateT s m) where
+    register = lift . register
+    release  = lift . release
 
-markStartingPoint :: (MonadSafe m) => m ()
-markStartingPoint = do
-    Finalizers up dn <- getFinalizers
-    putFinalizers (Finalizers (return ():up) (return ():dn))
+instance (MonadSafe m, Monoid w) => MonadSafe (W.WriterT w m) where
+    register = lift . register
+    release  = lift . release
 
-newFinalizers :: (MonadSafe m) => m (IO (), IO ())
-newFinalizers = do
-    Finalizers ups dns <- getFinalizers
-    let (newUps, ups') = new ups
-        (newDns, dns') = new dns
-    putFinalizers (Finalizers ups' dns')
-    return (newUps, newDns)
-  where
-    new fins = case fins of
-        []   -> (return (), [])
-        a:as -> (a        , as)
+instance (MonadSafe m, Monoid w) => MonadSafe (W'.WriterT w m) where
+    register = lift . register
+    release  = lift . release
 
-_promptly :: (MonadSafe m) => m r -> m r
-_promptly m = do
-    markStartingPoint
-    (m     >>= (\r -> cleanup >> return  r                     ))
-       `catch` (\e -> cleanup >> throw  (e :: Ex.SomeException))
-  where
-    cleanup = do
-        (up, dn) <- newFinalizers
-        liftIO up `catch` (\e -> liftIO dn >> throw (e :: Ex.SomeException))
-        liftIO dn
+instance (MonadSafe m, Monoid w) => MonadSafe (RWS.RWST i w s m) where
+    register = lift . register
+    release  = lift . release
 
-_tryWith
-    :: (((forall a . IO a -> IO a) -> IO (Either Ex.SomeException r))
-        -> IO (Either Ex.SomeException r) )
-    -> SafeIO r
-    -> IO (Either Ex.SomeException r)
-_tryWith mask sio = mask $ \restore ->
-    R.runReaderT (S'.evalStateT (E.runErrorT (unSafeIO sio0)) s0) (Mask restore)
-  where
-    sio0 = _promptly sio
-    s0   = Finalizers [] []
+instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST i w s m) where
+    register = lift . register
+    release  = lift . release
 
-_rethrow :: IO (Either Ex.SomeException r) -> IO r
-_rethrow io = do
-    x <- io
-    case x of
-        Left  e -> Ex.throw e
-        Right r -> return r
-
-{-| 'checkSafeIO' masks asynchronous exceptions using 'Ex.mask'.
-
-    Returns caught exceptions in a 'Left'
--}
-checkSafeIO :: SafeIO r -> IO (Either Ex.SomeException r)
-checkSafeIO = _tryWith Ex.mask
-{-# INLINABLE checkSafeIO #-}
-
--- | Like 'checkSafeIO', except using 'Ex.uninterruptibleMask'
-checkSaferIO :: SafeIO r -> IO (Either Ex.SomeException r)
-checkSaferIO = _tryWith Ex.uninterruptibleMask
-{-# INLINABLE checkSaferIO #-}
-
--- | Like 'checkSafeIO', except rethrows any caught exceptions
-runSafeIO :: SafeIO r -> IO r
-runSafeIO sio = _rethrow (checkSafeIO sio)
-{-# INLINABLE runSafeIO #-}
-
--- | Like 'checkSaferIO' except rethrows any caught exceptions
-runSaferIO :: SafeIO r -> IO r
-runSaferIO sio = _rethrow (checkSaferIO sio)
-{-# INLINABLE runSaferIO #-}
-
-{- $finalization
-    Use the following functions to guarantee that finalizers are called in the
-    event of:
-
-    * Exceptions within the bracketed code block
-
-    * Exceptions in other composed pipes
-
-    * Premature termination in other composed pipes
-
-    This documentation refers to the last two cases as \"dropped\" finalizers,
-    because execution does not terminate within the bracketed code block and
-    therefore does not trigger an immediate cleanup.  These dropped finalizers
-    still guarantee that they are eventually run, but they delay running until
-    the end of the surrounding 'promptly' block or the end of the 'SafeIO'
-    monad, whichever comes first.
-
-    To guarantee prompt finalization, surround your finalization code with the
-    tightest 'promptly' block that type-checks, such as:
-
-> runSafeIO $ runEffect $ do
->     promptly $ (p1 >-> p2) ()
->     promptly $ (p3 >-> p4) ()
-
-    The above code runs all dropped finalizers registered within @p1@ or @p2@
-    before beginning @p3@ and @p4@.
-
-    Nested finalizers are guaranteed to be called from inside to out.  For the
-    specific case of 'bracket' this means that resources are released in reverse
-    order of acquisition.
--}
-
-{-| @(promptly p)@ runs all dropped finalizers that @p@ registered when @p@
-    completes.
--}
-promptly :: (MonadSafe m) => Effect' m r -> Effect m r
-promptly m = up >\\ promptly m //> dn
-  where
-    up _ = return ()
-    dn _ = return ()
-
-{- I don't export 'register' only because people rarely want to guard solely
-   against premature termination.  Usually they also want to guard against
-   exceptions, too.
-
-    'register' should satisfy the following laws:
-
-* (register m) defines a functor from finalizers to functions:
-
-> register m1 . register m2 = register (m2 >> m1)
->
-> register (return ()) = id
-
-* 'register' defines a functor between Kleisli categories:
-
-> register m . (p1 >=> p2) = register m . p1 >=> register m . p2
->
-> register m . return = return
--}
-register
-    :: (MonadSafe m)
-    => IO ()
-    -> Proxy a' a b' b m r
-    -> Proxy a' a b' b m r
-register h p = up >\\ p //> dn
-  where
-    dn b = do
-        old <- getFinalizers
-        putFinalizers $ old { upstream = add h (upstream old) }
-	b' <- respond b
-	putFinalizers old
-	return b'
-    up a' = do
-        old <- getFinalizers
-        putFinalizers $ old { downstream = add h (downstream old) }
-        a  <- request a'
-        putFinalizers old
-        return a
-    add h old = case old of
-        []       -> []
-        fin:fins -> (fin >> h):fins
-
-{-| Similar to 'Ex.onException' from @Control.Exception@, except this also
-    protects against:
-
-    * premature termination from other pipe stages, and
-
-    * exceptions in other pipe stages.
-
-    @(`onAbort` fin)@ is a monad morphism:
-
-> (`onAbort` fin) $ do x <- m  =  do x <- m `onAbort` fin
->                      f x           f x `onAbort` fin
->
-> return x `onAbort` fin = return x
-
-    'onAbort' ensures finalizers are called from inside to out:
-
-> (`onAbort` (fin2 >> fin1)) = (`onAbort` fin1) . (`onAbort` fin2)
->
-> (`onAbort` return ()) = id
--}
-onAbort
-    :: (MonadSafe m)
-    => Proxy a' a b' b m r -- ^ Guarded computation
-    -> IO s                -- ^ Action to run on abort
-    -> Proxy a' a b' b m r
-onAbort p after =
-    register (after >> return ()) p
-        `catch` (\e -> do
-            liftIO after
-            throw (e :: Ex.SomeException) )
+onAbort :: (MonadSafe m) => m a -> IO b -> m a
+m1 `onAbort` io = do
+    key <- register (io >> return ())
+    r   <- m1
+    release key
+    return r
 {-# INLINABLE onAbort #-}
 
-{-| Analogous to 'Ex.finally' from @Control.Exception@
-
-> finally p after = do
->     r <- p `onAbort` after
->     liftIO after
->     return r
--}
-finally
-    :: (MonadSafe m)
-    => Proxy a' a b' b m r -- ^ Guarded computation
-    -> IO s                -- ^ Guaranteed final action
-    -> Proxy a' a b' b m r
-finally p after = do
-    r <- p `onAbort` after
-    liftIO after
-    return r
+finally :: (MonadSafe m) => m a -> IO b -> m a
+m1 `finally` after = bracket_ (return ()) after m1
 {-# INLINABLE finally #-}
 
-{-| Analogous to 'Ex.bracket' from @Control.Exception@
-
-    'bracket' guarantees that if the resource acquisition completes, then the
-    resource will be released.
-
-> bracket before after p = do
->     h <- liftIO before
->     p h `finally` after h
--}
-bracket
-    :: (MonadSafe m)
-    => IO h                        -- ^ Acquire resource
-    -> (h -> IO r')                -- ^ Release resource
-    -> (h -> Proxy a' a b' b m r)  -- ^ Use resource
-    -> Proxy a' a b' b m r
-bracket before after p = do
+bracket :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
+bracket before after action = C.mask $ \restore -> do
     h <- liftIO before
-    p h `finally` after h
+    r <- restore (action h) `onAbort` after h
+    liftIO (after h)
+    return r
 {-# INLINABLE bracket #-}
 
-{-| Analogous to 'Ex.bracket_' from @Control.Exception@
-
-> bracket_ before after p = do
->     liftIO before
->     p `finally` after
--}
-bracket_
-    :: (MonadSafe m)
-    => IO s                 -- ^ Acquire resource
-    -> IO t                 -- ^ Release resource
-    -> Proxy a' a b' b m r  -- ^ Use resource
-    -> Proxy a' a b' b m r
-bracket_ before after p = do
-    liftIO before
-    p `finally` after
+bracket_ :: (MonadSafe m) => IO a -> IO b -> m c -> m c
+bracket_ before after action = bracket before (\_ -> after) (\_ -> action)
 {-# INLINABLE bracket_ #-}
 
-{-| Analogous to 'Ex.bracketOnError' from @Control.Exception@
-
-> bracketOnAbort before after p = do
->     h <- liftIO before
->     p h `onAbort` after h
--}
-bracketOnAbort
-    :: (MonadSafe m)
-    => IO h                        -- ^ Acquire resource
-    -> (h -> IO s)                 -- ^ Release resource
-    -> (h -> Proxy a' a b' b m r)  -- ^ Use resource
-    -> Proxy a' a b' b m r
-bracketOnAbort before after p = do
+bracketOnError :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
+bracketOnError before after action = C.mask $ \restore -> do
     h <- liftIO before
-    p h `onAbort` after h
-{-# INLINABLE bracketOnAbort #-}
-
-{- $re-exports
-
-    @Control.Monad.IO.Class@ re-exports 'MonadIO'
--}
+    restore (action h) `onAbort` after h
+{-# INLINABLE bracketOnError #-}
