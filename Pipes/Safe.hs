@@ -9,11 +9,31 @@ module Pipes.Safe
     , MonadSafe(..)
 
     -- * Re-exports
-
+    , module Control.Monad.Catch
     ) where
 
 import Control.Applicative (Applicative(pure, (<*>)))
 import qualified Control.Monad.Catch as C
+import Control.Monad.Catch
+    ( MonadCatch(..)
+    , mask_
+    , uninterruptibleMask_
+    , catchAll
+    , catchIOError
+    , catchJust
+    , catchIf
+    , Handler(..)
+    , catches
+    , handle
+    , handleAll
+    , handleIOError
+    , handleJust
+    , handleIf
+    , try
+    , tryJust
+    , Exception(..)
+    , SomeException
+    )
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Trans.Class (MonadTrans(lift))
 import qualified Control.Monad.Catch.Pure          as E
@@ -32,14 +52,13 @@ import Pipes (Proxy, Effect)
 import Pipes.Internal (unsafeHoist, Proxy(..))
 import Pipes.Lift (liftCatchError, runReaderP)
 
--- TODO: Decide on re-exports from Control.Monad.Catch
 -- TODO: Get bounds on dependencies correct
 -- TODO: Add haddocks
 
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
 liftMask
-    :: (MonadIO m, C.MonadCatch m)
+    :: (MonadIO m, MonadCatch m)
     => (forall s . ((forall x . m x -> m x) -> m s) -> m s)
     -> ((forall x . Proxy a' a b' b m x -> Proxy a' a b' b m x)
         -> Proxy a' a b' b m r)
@@ -70,11 +89,11 @@ liftMask mask_ k = do
                 Pure r         -> Pure r
         loop (k unmask)
 
-instance (C.MonadCatch m, MonadIO m) => C.MonadCatch (Proxy a' a b' b m) where
-    throwM = lift . C.throwM
+instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
+    throwM = lift . throwM
     catch  = liftCatchError C.catch
-    mask                = liftMask C.mask
-    uninterruptibleMask = liftMask C.uninterruptibleMask
+    mask                = liftMask mask
+    uninterruptibleMask = liftMask uninterruptibleMask
 
 data Finalizers m = Finalizers
     { nextKey    :: !Integer
@@ -109,18 +128,18 @@ instance (MonadIO m) => MonadIO (SafeT m) where
     liftIO m = SafeT (liftIO m)
 
 -- Deriving 'MonadCatch'
-instance (C.MonadCatch m) => C.MonadCatch (SafeT m) where
-    throwM e = SafeT (C.throwM e)
+instance (MonadCatch m) => MonadCatch (SafeT m) where
+    throwM e = SafeT (throwM e)
     m `catch` f = SafeT (unSafeT m `C.catch` \r -> unSafeT (f r))
-    mask k = SafeT (C.mask (\restore ->
+    mask k = SafeT (mask (\restore ->
         unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
-    uninterruptibleMask k = SafeT (C.uninterruptibleMask (\restore ->
+    uninterruptibleMask k = SafeT (uninterruptibleMask (\restore ->
         unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
 
 instance MonadTrans SafeT where
     lift m = SafeT (lift m)
 
-runSafeT :: (C.MonadCatch m, MonadIO m) => SafeT m r -> m r
+runSafeT :: (MonadCatch m, MonadIO m) => SafeT m r -> m r
 runSafeT m = C.bracket
     (liftIO $ newIORef $! Finalizers 0 M.empty)
     (\ioref -> do
@@ -129,7 +148,7 @@ runSafeT m = C.bracket
     (R.runReaderT (unSafeT m))
 {-# INLINABLE runSafeT #-}
 
-runSafeP :: (C.MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect m r
+runSafeP :: (MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect m r
 runSafeP m = C.bracket
     (liftIO $ newIORef $! Finalizers 0 M.empty)
     (\ioref -> do
@@ -140,11 +159,11 @@ runSafeP m = C.bracket
 
 newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
-class (C.MonadCatch m, MonadIO m) => MonadSafe m where
+class (MonadCatch m, MonadIO m) => MonadSafe m where
     register :: IO () -> m ReleaseKey
     release  :: ReleaseKey -> m ()
 
-instance (MonadIO m, C.MonadCatch m) => MonadSafe (SafeT m) where
+instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
     register io = do
         ioref <- SafeT R.ask
         liftIO $ do
@@ -210,7 +229,7 @@ m1 `finally` after = bracket_ (return ()) after m1
 {-# INLINABLE finally #-}
 
 bracket :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
-bracket before after action = C.mask $ \restore -> do
+bracket before after action = mask $ \restore -> do
     h <- liftIO before
     r <- restore (action h) `onAbort` after h
     liftIO (after h)
@@ -222,7 +241,7 @@ bracket_ before after action = bracket before (\_ -> after) (\_ -> action)
 {-# INLINABLE bracket_ #-}
 
 bracketOnError :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
-bracketOnError before after action = C.mask $ \restore -> do
+bracketOnError before after action = mask $ \restore -> do
     h <- liftIO before
     restore (action h) `onAbort` after h
 {-# INLINABLE bracketOnError #-}
