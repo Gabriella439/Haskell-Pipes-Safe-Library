@@ -117,8 +117,6 @@ import Pipes.Core ((>\\), (//>))
 import Pipes.Internal (unsafeHoist, Proxy(..))
 import Pipes.Lift (liftCatchError, runReaderP)
 
--- TODO: Add haddocks
--- TODO: Update cabal description
 -- TODO: Switch to 'STM' instead of an 'MVar' for thread safety
 
 data Restore m = Unmasked | Masked (forall x . m x -> m x)

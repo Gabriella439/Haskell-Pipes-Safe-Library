@@ -13,14 +13,6 @@ Description:
     This package adds resource management and exception handling to the @pipes@
     ecosystem.
     .
-    Use @pipes-safe@ if you need to:
-    .
-    * acquire resources in pipes and ensure prompt and deterministic release,
-    .
-    * write exception-safe @pipes@ code, or:
-    .
-    * allocate resources lazily in response to downstream demand.
-    .
     Notable features include:
     .
     * /Resource Safety/: Guarantee finalization using @finally@, @bracket@ and
