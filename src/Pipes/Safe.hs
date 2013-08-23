@@ -57,6 +57,7 @@ import Pipes.Safe
 -}
 
 {-# LANGUAGE RankNTypes #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Pipes.Safe
     ( -- * SafeT
@@ -117,8 +118,6 @@ import Pipes.Core ((>\\), (//>))
 import Pipes.Internal (unsafeHoist, Proxy(..))
 import Pipes.Lift (liftCatchError, runReaderP)
 
--- TODO: Switch to 'STM' instead of an 'MVar' for thread safety
-
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
 liftMask
@@ -127,7 +126,7 @@ liftMask
     -> ((forall x . Proxy a' a b' b m x -> Proxy a' a b' b m x)
         -> Proxy a' a b' b m r)
     -> Proxy a' a b' b m r
-liftMask mask_ k = do
+liftMask maskFunction k = do
         ioref <- liftIO (newIORef Unmasked)
         let unmask p = do
                 mRestore <- liftIO (readIORef ioref)
@@ -140,14 +139,14 @@ liftMask mask_ k = do
             loop p = case p of
                 Request a' fa  -> Request a' (loop . fa )
                 Respond b  fb' -> Respond b  (loop . fb')
-                M m            -> M $ mask_ $ \restore -> do
+                M m0           -> M $ maskFunction $ \restore -> do
                     liftIO $ writeIORef ioref (Masked restore)
                     let loop' m = do
                             p' <- m
                             case p' of
                                 M m' -> loop' m'
                                 _    -> return p'
-                    p' <- loop' m
+                    p' <- loop' m0
                     liftIO $ writeIORef ioref  Unmasked
                     return (loop p')
                 Pure r         -> Pure r
@@ -160,8 +159,8 @@ instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
     uninterruptibleMask = liftMask uninterruptibleMask
 
 data Finalizers m = Finalizers
-    { nextKey    :: !Integer
-    , finalizers :: !(M.Map Integer (m ()))
+    { _nextKey    :: !Integer
+    , _finalizers :: !(M.Map Integer (m ()))
     }
 
 {-| 'SafeT' is a monad transformer that extends the base monad with the ability
@@ -334,7 +333,7 @@ bracket :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
 bracket before after action = mask $ \restore -> do
     h <- liftIO before
     r <- restore (action h) `onException` after h
-    liftIO (after h)
+    _ <- liftIO (after h)
     return r
 {-# INLINABLE bracket #-}
 
