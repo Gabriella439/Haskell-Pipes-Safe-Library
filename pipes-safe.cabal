@@ -48,4 +48,4 @@ Library
         transformers >= 0.2.0.0 && < 0.4,
         pipes        >= 4.0.0   && < 4.1
     Exposed-Modules: Pipes.Safe
-    GHC-Options: -O2
+    GHC-Options: -O2 -Wall
