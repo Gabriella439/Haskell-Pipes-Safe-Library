@@ -52,8 +52,8 @@ import Pipes (Proxy, Effect)
 import Pipes.Internal (unsafeHoist, Proxy(..))
 import Pipes.Lift (liftCatchError, runReaderP)
 
--- TODO: Get bounds on dependencies correct
 -- TODO: Add haddocks
+-- TODO: Update cabal description
 
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
