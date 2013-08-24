@@ -64,6 +64,8 @@ module Pipes.Safe
       SafeT
     , runSafeT
     , runSafeP
+
+     -- * MonadSafe
     , ReleaseKey
     , MonadSafe(..)
     , onException
