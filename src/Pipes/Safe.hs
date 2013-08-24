@@ -40,10 +40,10 @@ import Pipes.Safe
 {readFile.hs closed}
 
     Note that the 'MonadCatch' instance for 'Proxy' provides weaker versions of
-    'mask' and 'uninterruptibleMask' that do not completely prevent completely
-    prevent asynchronous exceptions.  Instead, they provide a weaker guarantee
-    that asynchronous exceptions will only occur during 'Pipes.await's or
-    'Pipes.yield's and nowhere else.  For example, if you write:
+    'mask' and 'uninterruptibleMask' that do not completely prevent asynchronous
+    exceptions.  Instead, they provide a weaker guarantee that asynchronous
+    exceptions will only occur during 'Pipes.await's or 'Pipes.yield's and
+    nowhere else.  For example, if you write:
 
 > mask_ $ do
 >     x <- await
