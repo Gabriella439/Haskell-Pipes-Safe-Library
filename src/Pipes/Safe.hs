@@ -1,4 +1,10 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE
+      RankNTypes
+    , FlexibleInstances
+    , MultiParamTypeClasses
+    , UndecidableInstances
+    , FunctionalDependencies
+  #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 {-| This module provides an orphan 'MonadCatch' instance for 'Proxy' of the
@@ -80,6 +86,7 @@ module Pipes.Safe
     ) where
 
 import Control.Applicative (Applicative(pure, (<*>)))
+import Control.Monad.Base (MonadBase(liftBase), liftBaseDefault)
 import qualified Control.Monad.Catch as C
 import Control.Monad.Catch
     ( MonadCatch(..)
@@ -160,9 +167,15 @@ instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
     mask                = liftMask mask
     uninterruptibleMask = liftMask uninterruptibleMask
 
-data Finalizers m = Finalizers
+instance (MonadBase n m) => MonadBase n (Proxy a' a b' b m) where
+    liftBase = liftBaseDefault
+
+instance (MonadBase n m) => MonadBase n (E.CatchT m) where
+    liftBase = liftBaseDefault
+
+data Finalizers n = Finalizers
     { _nextKey    :: !Integer
-    , _finalizers :: !(M.Map Integer (m ()))
+    , _finalizers :: !(M.Map Integer (n ()))
     }
 
 {-| 'SafeT' is a monad transformer that extends the base monad with the ability
@@ -171,16 +184,16 @@ data Finalizers m = Finalizers
     All unreleased finalizers are called at the end of the 'SafeT' block, even
     in the event of exceptions.
 -}
-newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Finalizers m)) m r }
+newtype SafeT n m r = SafeT { unSafeT :: R.ReaderT (IORef (Finalizers n)) m r }
 
 -- Deriving 'Functor'
-instance (Monad m) => Functor (SafeT m) where
+instance (Monad m) => Functor (SafeT n m) where
     fmap f m = SafeT (do
         r <- unSafeT m
         return (f r) )
 
 -- Deriving 'Applicative'
-instance (Monad m) => Applicative (SafeT m) where
+instance (Monad m) => Applicative (SafeT n m) where
     pure r = SafeT (return r)
     mf <*> mx = SafeT (do
         f <- unSafeT mf
@@ -188,18 +201,21 @@ instance (Monad m) => Applicative (SafeT m) where
         return (f x) )
 
 -- Deriving 'Monad'
-instance (Monad m) => Monad (SafeT m) where
+instance (Monad m) => Monad (SafeT n m) where
     return r = SafeT (return r)
     m >>= f = SafeT (do
         r <- unSafeT m
         unSafeT (f r) )
 
 -- Deriving 'MonadIO'
-instance (MonadIO m) => MonadIO (SafeT m) where
+instance (MonadIO m) => MonadIO (SafeT n m) where
     liftIO m = SafeT (liftIO m)
 
+instance (MonadBase n m) => MonadBase n (SafeT n m) where
+    liftBase = liftBaseDefault
+
 -- Deriving 'MonadCatch'
-instance (MonadCatch m) => MonadCatch (SafeT m) where
+instance (MonadCatch m) => MonadCatch (SafeT n m) where
     throwM e = SafeT (throwM e)
     m `catch` f = SafeT (unSafeT m `C.catch` \r -> unSafeT (f r))
     mask k = SafeT (mask (\restore ->
@@ -207,18 +223,18 @@ instance (MonadCatch m) => MonadCatch (SafeT m) where
     uninterruptibleMask k = SafeT (uninterruptibleMask (\restore ->
         unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
 
-instance MonadTrans SafeT where
+instance MonadTrans (SafeT n) where
     lift m = SafeT (lift m)
 
 {-| Run the 'SafeT' monad transformer, executing all dropped finalizers at the
     end of the computation
 -}
-runSafeT :: (MonadCatch m, MonadIO m) => SafeT m r -> m r
+runSafeT :: (MonadCatch m, MonadIO m, MonadBase n m) => SafeT n m r -> m r
 runSafeT m = C.bracket
     (liftIO $ newIORef $! Finalizers 0 M.empty)
     (\ioref -> do
         Finalizers _ fs <- liftIO (readIORef ioref)
-        mapM snd (M.toDescList fs) )
+        mapM (liftBase . snd) (M.toDescList fs) )
     (R.runReaderT (unSafeT m))
 {-# INLINABLE runSafeT #-}
 
@@ -228,12 +244,14 @@ runSafeT m = C.bracket
     Use 'runSafeP' to safely flush all dropped finalizers and ensure prompt
     finalization without exiting the 'Proxy' monad.
 -}
-runSafeP :: (MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect' m r
+runSafeP
+    :: (MonadCatch m, MonadIO m, MonadBase n m)
+    => Effect (SafeT n m) r -> Effect' m r
 runSafeP m = C.bracket
     (liftIO $ newIORef $! Finalizers 0 M.empty)
     (\ioref -> do
         Finalizers _ fs <- liftIO (readIORef ioref)
-        lift $ mapM snd (M.toDescList fs) )
+        lift $ mapM (liftBase . snd) (M.toDescList fs) )
     (\ioref -> discard >\\ runReaderP ioref (unsafeHoist unSafeT m) //> discard)
 {-# INLINABLE runSafeP #-}
 
@@ -241,12 +259,12 @@ runSafeP m = C.bracket
 newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
 -- | 'MonadSafe' lets you 'register' and 'release' finalizers.
-class (MonadCatch m, MonadIO m) => MonadSafe m where
+class (MonadCatch m, MonadIO m, MonadBase n m) => MonadSafe n m | m -> n where
     {-| 'register' a finalizer, ensuring that the finalizer gets called if the
         finalizer is not 'release'd before the end of the surrounding 'SafeT'
         block.
     -}
-    register :: IO () -> m ReleaseKey
+    register :: n () -> m ReleaseKey
 
     {-| 'release' a registered finalizer
 
@@ -255,12 +273,13 @@ class (MonadCatch m, MonadIO m) => MonadSafe m where
     -}
     release  :: ReleaseKey -> m ()
 
-instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
+instance (MonadIO m, MonadCatch m, MonadBase b m)
+    => MonadSafe b (SafeT b m) where
     register io = do
         ioref <- SafeT R.ask
         liftIO $ do
             Finalizers n fs <- readIORef ioref
-            writeIORef ioref $! Finalizers (n + 1) (M.insert n (liftIO io) fs)
+            writeIORef ioref $! Finalizers (n + 1) (M.insert n io fs)
             return (ReleaseKey n)
     release key = do
         ioref <- SafeT R.ask
@@ -268,43 +287,43 @@ instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
             Finalizers n fs <- readIORef ioref
             writeIORef ioref $! Finalizers n (M.delete (unlock key) fs)
 
-instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
+instance (MonadSafe n m) => MonadSafe n (Proxy a' a b' b m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m) => MonadSafe (I.IdentityT m) where
+instance (MonadSafe n m) => MonadSafe n (I.IdentityT m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m) => MonadSafe (E.CatchT m) where
+instance (MonadSafe n m) => MonadSafe n (E.CatchT m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m) => MonadSafe (R.ReaderT i m) where
+instance (MonadSafe n m) => MonadSafe n (R.ReaderT i m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m) => MonadSafe (S.StateT s m) where
+instance (MonadSafe n m) => MonadSafe n (S.StateT s m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m) => MonadSafe (S'.StateT s m) where
+instance (MonadSafe n m) => MonadSafe n (S'.StateT s m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m, Monoid w) => MonadSafe (W.WriterT w m) where
+instance (MonadSafe n m, Monoid w) => MonadSafe n (W.WriterT w m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m, Monoid w) => MonadSafe (W'.WriterT w m) where
+instance (MonadSafe n m, Monoid w) => MonadSafe n (W'.WriterT w m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m, Monoid w) => MonadSafe (RWS.RWST i w s m) where
+instance (MonadSafe n m, Monoid w) => MonadSafe n (RWS.RWST i w s m) where
     register = lift . register
     release  = lift . release
 
-instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST i w s m) where
+instance (MonadSafe n m, Monoid w) => MonadSafe n (RWS'.RWST i w s m) where
     register = lift . register
     release  = lift . release
 
@@ -313,10 +332,10 @@ instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST i w s m) where
 
     @(\`onException\` io)@ is a monad morphism.
 -}
-onException :: (MonadSafe m) => m a -> IO b -> m a
+onException :: (MonadSafe n m) => m a -> n b -> m a
 m1 `onException` io = do
     key <- register (io >> return ())
-    r   <- m1 `C.onException` liftIO io
+    r   <- m1 `C.onException` liftBase io
     release key
     return r
 {-# INLINABLE onException #-}
@@ -324,34 +343,34 @@ m1 `onException` io = do
 {-| Analogous to 'C.finally' from @Control.Monad.Catch@, except this also
     protects against premature termination
 -}
-finally :: (MonadSafe m) => m a -> IO b -> m a
+finally :: (MonadSafe n m) => m a -> n b -> m a
 m1 `finally` after = bracket_ (return ()) after m1
 {-# INLINABLE finally #-}
 
 {-| Analogous to 'C.bracket' from @Control.Monad.Catch@, except this also
     protects against premature termination
 -}
-bracket :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
+bracket :: (MonadSafe n m) => n a -> (a -> n b) -> (a -> m c) -> m c
 bracket before after action = mask $ \restore -> do
-    h <- liftIO before
+    h <- liftBase before
     r <- restore (action h) `onException` after h
-    _ <- liftIO (after h)
+    _ <- liftBase (after h)
     return r
 {-# INLINABLE bracket #-}
 
 {-| Analogous to 'C.bracket_' from @Control.Monad.Catch@, except this also
     protects against premature termination
 -}
-bracket_ :: (MonadSafe m) => IO a -> IO b -> m c -> m c
+bracket_ :: (MonadSafe n m) => n a -> n b -> m c -> m c
 bracket_ before after action = bracket before (\_ -> after) (\_ -> action)
 {-# INLINABLE bracket_ #-}
 
 {-| Analogous to 'C.bracketOnError' from @Control.Monad.Catch@, except this also
     protects against premature termination
 -}
-bracketOnError :: (MonadSafe m) => IO a -> (a -> IO b) -> (a -> m c) -> m c
+bracketOnError :: (MonadSafe n m) => n a -> (a -> n b) -> (a -> m c) -> m c
 bracketOnError before after action = mask $ \restore -> do
-    h <- liftIO before
+    h <- liftBase before
     restore (action h) `onException` after h
 {-# INLINABLE bracketOnError #-}
 
