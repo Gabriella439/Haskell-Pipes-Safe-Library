@@ -213,8 +213,8 @@ instance (MonadCatch m) => MonadCatch (SafeT m) where
 instance MonadTrans SafeT where
     lift m = SafeT (lift m)
 
-{-| Run the 'SafeT' monad transformer, executing all dropped finalizers at the
-    end of the computation
+{-| Run the 'SafeT' monad transformer, executing all unreleased finalizers at
+    the end of the computation
 -}
 runSafeT :: (MonadCatch m, MonadIO m) => SafeT m r -> m r
 runSafeT m = C.bracket
@@ -225,10 +225,10 @@ runSafeT m = C.bracket
     (R.runReaderT (unSafeT m))
 {-# INLINABLE runSafeT #-}
 
-{-| Run 'SafeT' in the base monad, executing all dropped finalizers at the end
-    of the computation
+{-| Run 'SafeT' in the base monad, executing all unreleased finalizers at the
+    end of the computation
 
-    Use 'runSafeP' to safely flush all dropped finalizers and ensure prompt
+    Use 'runSafeP' to safely flush all unreleased finalizers and ensure prompt
     finalization without exiting the 'Proxy' monad.
 -}
 runSafeP :: (MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect' m r
