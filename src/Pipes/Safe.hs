@@ -77,9 +77,11 @@ module Pipes.Safe
     -- * Re-exports
     -- $reexports
     , module Control.Monad.Catch
+    , module Control.Exception
     ) where
 
 import Control.Applicative (Applicative(pure, (<*>)))
+import Control.Exception(Exception(..), SomeException(..))
 import qualified Control.Monad.Catch as C
 import Control.Monad.Catch
     ( MonadCatch(..)
@@ -392,4 +394,6 @@ bracketOnError before after action = mask $ \restore -> do
     @Control.Monad.Catch@ re-exports all functions except for the ones that
     conflict with the generalized versions provided here (i.e. 'bracket',
     'finally', etc.).
+
+    @Control.Exception@ re-exports 'Exception' and 'SomeException'.
 -}
