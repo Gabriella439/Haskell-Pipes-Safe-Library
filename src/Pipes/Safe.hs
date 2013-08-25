@@ -1,3 +1,6 @@
+{-# LANGUAGE RankNTypes #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
 {-| This module provides an orphan 'MonadCatch' instance for 'Proxy' of the
     form:
 
@@ -55,9 +58,6 @@ import Pipes.Safe
     two 'print' statements.  This weaker guarantee suffices to provide
     asynchronous exception safety.
 -}
-
-{-# LANGUAGE RankNTypes #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Pipes.Safe
     ( -- * SafeT
