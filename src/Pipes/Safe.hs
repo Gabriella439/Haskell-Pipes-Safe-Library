@@ -262,8 +262,11 @@ type instance Base (W'.WriterT w m) = Base m
 type instance Base (RWS.RWST i w s m) = Base m
 type instance Base (RWS'.RWST i w s m) = Base m
 
--- | 'MonadSafe' lets you 'register' and 'release' finalizers.
+{-| 'MonadSafe' lets you 'register' and 'release' finalizers that execute in a
+    'Base' monad
+-}
 class (MonadCatch m, MonadIO m, Monad (Base m)) => MonadSafe m where
+    -- | Lift an action from the 'Base' monad
     liftBase :: Base m r -> m r
 
     {-| 'register' a finalizer, ensuring that the finalizer gets called if the
