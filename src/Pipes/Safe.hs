@@ -353,7 +353,7 @@ instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST i w s m) where
 onException :: (MonadSafe m) => m a -> Base m b -> m a
 m1 `onException` io = do
     key <- register (io >> return ())
-    r   <- m1 `C.onException` liftBase io
+    r   <- m1
     release key
     return r
 {-# INLINABLE onException #-}
