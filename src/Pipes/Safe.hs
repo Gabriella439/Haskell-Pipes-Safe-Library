@@ -67,6 +67,7 @@ module Pipes.Safe
 
      -- * MonadSafe
     , ReleaseKey
+    , Base
     , MonadSafe(..)
     , onException
     , finally
@@ -245,10 +246,24 @@ runSafeP m = C.bracket
 -- | Token used to 'release' a previously 'register'ed finalizer
 newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
+-- | The base monad of a monad transformer stack
+type family Base (m :: * -> *) :: * -> *
+
+type instance Base IO = IO
+type instance Base (SafeT m) = m
+type instance Base (Proxy a' a b' b m) = Base m
+type instance Base (I.IdentityT m) = Base m
+type instance Base (E.CatchT m) = Base m
+type instance Base (R.ReaderT i m) = Base m
+type instance Base (S.StateT s m) = Base m
+type instance Base (S'.StateT s m) = Base m
+type instance Base (W.WriterT w m) = Base m
+type instance Base (W'.WriterT w m) = Base m
+type instance Base (RWS.RWST i w s m) = Base m
+type instance Base (RWS'.RWST i w s m) = Base m
+
 -- | 'MonadSafe' lets you 'register' and 'release' finalizers.
 class (MonadCatch m, MonadIO m, Monad (Base m)) => MonadSafe m where
-    type Base m :: * -> *
-
     liftBase :: Base m r -> m r
 
     {-| 'register' a finalizer, ensuring that the finalizer gets called if the
@@ -265,8 +280,6 @@ class (MonadCatch m, MonadIO m, Monad (Base m)) => MonadSafe m where
     release  :: ReleaseKey -> m ()
 
 instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
-    type Base (SafeT m) = m
-
     liftBase = lift
 
     register io = do
@@ -283,61 +296,51 @@ instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
             writeIORef ioref $! Finalizers n (M.delete (unlock key) fs)
 
 instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
-    type Base (Proxy a' a b' b m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (I.IdentityT m) where
-    type Base (I.IdentityT m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (E.CatchT m) where
-    type Base (E.CatchT m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (R.ReaderT i m) where
-    type Base (R.ReaderT i m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (S.StateT s m) where
-    type Base (S.StateT s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (S'.StateT s m) where
-    type Base (S'.StateT s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (W.WriterT w m) where
-    type Base (W.WriterT w m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (W'.WriterT w m) where
-    type Base (W'.WriterT w m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (RWS.RWST i w s m) where
-    type Base (RWS.RWST i w s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST i w s m) where
-    type Base (RWS'.RWST i w s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
