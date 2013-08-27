@@ -246,7 +246,7 @@ runSafeP m = C.bracket
 -- | Token used to 'release' a previously 'register'ed finalizer
 newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
--- | The base monad of a monad transformer stack
+-- | The base monad of a monad transformer stack, typically 'IO'
 type family Base (m :: * -> *) :: * -> *
 
 type instance Base IO = IO
