@@ -118,10 +118,9 @@ import qualified Control.Monad.Trans.Writer.Strict as W'
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Map as M
 import Data.Monoid (Monoid)
-import Pipes (Proxy, Effect, Effect', discard)
-import Pipes.Core ((>\\), (//>))
+import Pipes (Proxy, Effect, Effect', runEffect)
 import Pipes.Internal (unsafeHoist, Proxy(..))
-import Pipes.Lift (liftCatchError, runReaderP)
+import Pipes.Lift (liftCatchError)
 
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
@@ -235,12 +234,7 @@ runSafeT m = C.bracket
     finalization without exiting the 'Proxy' monad.
 -}
 runSafeP :: (MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect' m r
-runSafeP m = C.bracket
-    (liftIO $ newIORef $! Finalizers 0 M.empty)
-    (\ioref -> do
-        Finalizers _ fs <- liftIO (readIORef ioref)
-        lift $ mapM snd (M.toDescList fs) )
-    (\ioref -> discard >\\ runReaderP ioref (unsafeHoist unSafeT m) //> discard)
+runSafeP = lift . runSafeT . runEffect
 {-# INLINABLE runSafeP #-}
 
 -- | Token used to 'release' a previously 'register'ed finalizer
