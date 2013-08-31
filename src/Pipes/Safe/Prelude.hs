@@ -1,6 +1,6 @@
 -- | Simple resource management functions
 
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE RankNTypes, TypeFamilies #-}
 
 module Pipes.Safe.Prelude (
     -- * Handle management
@@ -29,7 +29,7 @@ withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
     Note that 'String's are very inefficient, and I will release future separate
     packages with 'Data.ByteString.ByteString' and 'Data.Text.Text' operations.
     I only provide these to allow users to test simple I/O without requiring any
-    additional library dependencies. 
+    additional library dependencies.
 -}
 
 {-| Read lines from a file, automatically opening and closing the file as
