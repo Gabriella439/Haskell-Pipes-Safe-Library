@@ -34,7 +34,7 @@
     ... then this generalized 'bracket' will guard against both exceptions and
     premature termination of other pipes:
 
->>> runSafeT $ runEffect $ readFile "readFile.hs" >-> P.take 4 >-> P.stdout
+>>> runSafeT $ runEffect $ readFile "readFile.hs" >-> P.take 4 >-> P.stdoutLn
 {readFile.hs open}
 -- readFile.hs
 import Pipes
