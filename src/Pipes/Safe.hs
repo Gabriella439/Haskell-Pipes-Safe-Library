@@ -240,7 +240,7 @@ runSafeP = lift . runSafeT . runEffect
 -- | Token used to 'release' a previously 'register'ed finalizer
 newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
--- | The base monad of a monad transformer stack, typically 'IO'
+-- | The monad used to run resource management actions, typically 'IO'
 type family Base (m :: * -> *) :: * -> *
 
 type instance Base IO = IO
