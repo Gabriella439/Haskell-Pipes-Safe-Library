@@ -1,6 +1,6 @@
 -- | Simple resource management functions
 
-{-# LANGUAGE RankNTypes, TypeFamilies #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Pipes.Safe.Prelude (
     -- * Handle management
@@ -12,17 +12,16 @@ module Pipes.Safe.Prelude (
     writeFile
     ) where
 
+import Control.Monad.IO.Class (MonadIO(liftIO))
 import Pipes (Producer', Consumer')
-import Pipes.Safe (bracket, MonadSafe, Base)
+import Pipes.Safe (bracket, MonadSafe)
 import qualified Pipes.Prelude as P
 import qualified System.IO as IO
 import Prelude hiding (readFile, writeFile)
 
 -- | Acquire a 'IO.Handle' within 'MonadSafe'
-withFile
-    :: (MonadSafe m, Base m ~ IO)
-    => FilePath -> IO.IOMode -> (IO.Handle -> m r) -> m r
-withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
+withFile :: (MonadSafe m) => FilePath -> IO.IOMode -> (IO.Handle -> m r) -> m r
+withFile file ioMode = bracket (liftIO $ IO.openFile file ioMode) (liftIO . IO.hClose)
 {-# INLINABLE withFile #-}
 
 {- $strings
@@ -35,13 +34,13 @@ withFile file ioMode = bracket (IO.openFile file ioMode) IO.hClose
 {-| Read lines from a file, automatically opening and closing the file as
     necessary
 -}
-readFile :: (MonadSafe m, Base m ~ IO) => FilePath -> Producer' String m ()
+readFile :: (MonadSafe m) => FilePath -> Producer' String m ()
 readFile file = withFile file IO.ReadMode P.fromHandle
 {-# INLINABLE readFile #-}
 
 {-| Write lines to a file, automatically opening and closing the file as
     necessary
 -}
-writeFile :: (MonadSafe m, Base m ~ IO) => FilePath -> Consumer' String m r
+writeFile :: (MonadSafe m) => FilePath -> Consumer' String m r
 writeFile file = withFile file IO.WriteMode P.toHandle
 {-# INLINABLE writeFile #-}

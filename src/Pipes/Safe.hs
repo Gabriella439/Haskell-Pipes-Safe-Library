@@ -67,8 +67,10 @@ module Pipes.Safe
 
      -- * MonadSafe
     , ReleaseKey
-    , Base
     , MonadSafe(..)
+
+      -- * Utilities
+      -- $utilities
     , onException
     , finally
     , bracket
@@ -240,26 +242,15 @@ runSafeP = lift . runSafeT . runEffect
 -- | Token used to 'release' a previously 'register'ed finalizer
 newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 
--- | The monad used to run resource management actions, typically 'IO'
-type family Base (m :: * -> *) :: * -> *
-
-type instance Base IO = IO
-type instance Base (SafeT m) = m
-type instance Base (Proxy a' a b' b m) = Base m
-type instance Base (I.IdentityT m) = Base m
-type instance Base (E.CatchT m) = Base m
-type instance Base (R.ReaderT i m) = Base m
-type instance Base (S.StateT s m) = Base m
-type instance Base (S'.StateT s m) = Base m
-type instance Base (W.WriterT w m) = Base m
-type instance Base (W'.WriterT w m) = Base m
-type instance Base (RWS.RWST i w s m) = Base m
-type instance Base (RWS'.RWST i w s m) = Base m
-
 {-| 'MonadSafe' lets you 'register' and 'release' finalizers that execute in a
     'Base' monad
 -}
-class (MonadCatch m, MonadIO m, Monad (Base m)) => MonadSafe m where
+class (MonadCatch m, MonadIO m, MonadIO (Base m)) => MonadSafe m where
+    {-| The monad used to run resource management actions, corresponding to the
+        monad directly beneath 'SafeT'
+    -}
+    type Base (m :: * -> *) :: * -> *
+
     -- | Lift an action from the 'Base' monad
     liftBase :: Base m r -> m r
 
@@ -277,6 +268,8 @@ class (MonadCatch m, MonadIO m, Monad (Base m)) => MonadSafe m where
     release  :: ReleaseKey -> m ()
 
 instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
+    type Base (SafeT m) = m
+
     liftBase = lift
 
     register io = do
@@ -293,51 +286,61 @@ instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
             writeIORef ioref $! Finalizers n (M.delete (unlock key) fs)
 
 instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
+    type Base (Proxy a' a b' b m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (I.IdentityT m) where
+    type Base (I.IdentityT m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (E.CatchT m) where
+    type Base (E.CatchT m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (R.ReaderT i m) where
+    type Base (R.ReaderT i m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (S.StateT s m) where
+    type Base (S.StateT s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m) => MonadSafe (S'.StateT s m) where
+    type Base (S'.StateT s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (W.WriterT w m) where
+    type Base (W.WriterT w m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (W'.WriterT w m) where
+    type Base (W'.WriterT w m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (RWS.RWST i w s m) where
+    type Base (RWS.RWST i w s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
 
 instance (MonadSafe m, Monoid w) => MonadSafe (RWS'.RWST i w s m) where
+    type Base (RWS'.RWST i w s m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
@@ -354,6 +357,30 @@ m1 `onException` io = do
     release key
     return r
 {-# INLINABLE onException #-}
+
+{- $utilities
+    These utilities let you supply a finalizer that runs in the 'Base' monad
+    (i.e. the monad directly beneath 'SafeT').  If you don't need to use the
+    full power of the 'Base' monad and you only need to use to use 'IO', then
+    just wrap the finalizer in 'liftIO', like this:
+
+> myAction `finally` (liftIO myFinalizer)
+
+    This will lead to a simple inferred type with a single 'MonadSafe'
+    constraint:
+
+> (MonadSafe m) => ...
+
+    For examples of this, see the utilities in "Pipes.Safe.Prelude".
+
+    If you omit the 'liftIO', the compiler will infer the following constraint
+    instead:
+
+> (MonadSafe m, Base m ~ IO) => ...
+
+    This means that this function would require 'IO' directly beneath the
+    'SafeT' monad transformer, which might not be what you want.
+-}
 
 {-| Analogous to 'C.finally' from @Control.Monad.Catch@, except this also
     protects against premature termination
