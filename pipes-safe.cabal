@@ -38,9 +38,10 @@ Library
         containers   >= 0.3.0.0 && < 0.6,
         exceptions   >= 0.3.2   && < 0.4,
         transformers >= 0.2.0.0 && < 0.4,
-        pipes        >= 4.0.0   && < 4.1
+        pipes        >= 4.0.0   && < 4.1,
+        void
     Exposed-Modules:
         Pipes.Safe,
-        Pipes.Safe.Prelude
+        Pipes.Example
     HS-Source-Dirs: src
     GHC-Options: -O2 -Wall
