@@ -38,7 +38,7 @@ Library
         containers   >= 0.3.0.0 && < 0.6,
         exceptions   >= 0.3.2   && < 0.4,
         transformers >= 0.2.0.0 && < 0.4,
-        pipes        >= 4.0.0   && < 4.1
+        pipes        >= 4.0.0   && < 4.2
     Exposed-Modules:
         Pipes.Safe,
         Pipes.Safe.Prelude
