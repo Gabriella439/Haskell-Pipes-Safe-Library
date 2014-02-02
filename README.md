@@ -1,4 +1,4 @@
-# Pipes-Safe v2.0.1
+# Pipes-Safe v2.0.2
 
 `pipes-safe` builds upon
 [the `pipes` library](https://github.com/Gabriel439/Haskell-Pipes-Library) to
@@ -35,8 +35,8 @@ pipelines.
 
 ## Development Status
 
-`pipes-safe` is complete and if the API does not change by the end of 2013 then
-the library will be officially stabilized.
+`pipes-safe` is mostly stable.  Research into prompter finalization alternatives
+will take place in a separate library.
 
 ## Community Resources
 
