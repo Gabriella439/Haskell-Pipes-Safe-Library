@@ -88,6 +88,7 @@ import Control.Exception(Exception(..), SomeException(..))
 import qualified Control.Monad.Catch as C
 import Control.Monad.Catch
     ( MonadCatch(..)
+    , MonadThrow(..)
     , mask_
     , uninterruptibleMask_
     , catchAll
@@ -161,8 +162,10 @@ liftMask maskFunction k = do
                 Pure r         -> Pure r
         loop (k unmask)
 
-instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
+instance MonadThrow m => MonadThrow (Proxy a' a b' b m) where
     throwM = lift . throwM
+
+instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
     catch  = liftCatchError C.catch
     mask                = liftMask mask
     uninterruptibleMask = liftMask uninterruptibleMask
@@ -205,9 +208,12 @@ instance (Monad m) => Monad (SafeT m) where
 instance (MonadIO m) => MonadIO (SafeT m) where
     liftIO m = SafeT (liftIO m)
 
+-- Deriving 'MonadThrow'
+instance MonadThrow m => MonadThrow (SafeT m) where
+    throwM e = SafeT (throwM e)
+
 -- Deriving 'MonadCatch'
 instance (MonadCatch m) => MonadCatch (SafeT m) where
-    throwM e = SafeT (throwM e)
     m `catch` f = SafeT (unSafeT m `C.catch` \r -> unSafeT (f r))
     mask k = SafeT (mask (\restore ->
         unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
