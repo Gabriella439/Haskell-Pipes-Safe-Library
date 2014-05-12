@@ -89,6 +89,7 @@ import qualified Control.Monad.Catch as C
 import Control.Monad.Catch
     ( MonadCatch(..)
     , MonadThrow(..)
+    , MonadMask(..)
     , mask_
     , uninterruptibleMask_
     , catchAll
@@ -162,11 +163,13 @@ liftMask maskFunction k = do
                 Pure r         -> Pure r
         loop (k unmask)
 
-instance MonadThrow m => MonadThrow (Proxy a' a b' b m) where
+instance (MonadThrow m) => MonadThrow (Proxy a' a b' b m) where
     throwM = lift . throwM
 
-instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
-    catch  = liftCatchError C.catch
+instance (MonadCatch m) => MonadCatch (Proxy a' a b' b m) where
+    catch = liftCatchError C.catch
+
+instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
     mask                = liftMask mask
     uninterruptibleMask = liftMask uninterruptibleMask
 
@@ -215,6 +218,9 @@ instance MonadThrow m => MonadThrow (SafeT m) where
 -- Deriving 'MonadCatch'
 instance (MonadCatch m) => MonadCatch (SafeT m) where
     m `catch` f = SafeT (unSafeT m `C.catch` \r -> unSafeT (f r))
+
+-- Deriving 'MonadMask'
+instance (MonadMask m) => MonadMask (SafeT m) where
     mask k = SafeT (mask (\restore ->
         unSafeT (k (\ma -> SafeT (restore (unSafeT ma)))) ))
     uninterruptibleMask k = SafeT (uninterruptibleMask (\restore ->
@@ -226,7 +232,7 @@ instance MonadTrans SafeT where
 {-| Run the 'SafeT' monad transformer, executing all unreleased finalizers at
     the end of the computation
 -}
-runSafeT :: (MonadCatch m, MonadIO m) => SafeT m r -> m r
+runSafeT :: (MonadMask m, MonadIO m) => SafeT m r -> m r
 runSafeT m = C.bracket
     (liftIO $ newIORef $! Finalizers 0 M.empty)
     (\ioref -> do
@@ -241,7 +247,7 @@ runSafeT m = C.bracket
     Use 'runSafeP' to safely flush all unreleased finalizers and ensure prompt
     finalization without exiting the 'Proxy' monad.
 -}
-runSafeP :: (MonadCatch m, MonadIO m) => Effect (SafeT m) r -> Effect' m r
+runSafeP :: (MonadMask m, MonadIO m) => Effect (SafeT m) r -> Effect' m r
 runSafeP = lift . runSafeT . runEffect
 {-# INLINABLE runSafeP #-}
 
@@ -251,7 +257,7 @@ newtype ReleaseKey = ReleaseKey { unlock :: Integer }
 {-| 'MonadSafe' lets you 'register' and 'release' finalizers that execute in a
     'Base' monad
 -}
-class (MonadCatch m, MonadIO m, MonadIO (Base m)) => MonadSafe m where
+class (MonadCatch m, MonadMask m, MonadIO m, MonadIO (Base m)) => MonadSafe m where
     {-| The monad used to run resource management actions, corresponding to the
         monad directly beneath 'SafeT'
     -}
@@ -273,7 +279,7 @@ class (MonadCatch m, MonadIO m, MonadIO (Base m)) => MonadSafe m where
     -}
     release  :: ReleaseKey -> m ()
 
-instance (MonadIO m, MonadCatch m) => MonadSafe (SafeT m) where
+instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
     type Base (SafeT m) = m
 
     liftBase = lift
