@@ -134,34 +134,35 @@ liftMask
     -> ((forall x . Proxy a' a b' b m x -> Proxy a' a b' b m x)
         -> Proxy a' a b' b m r)
     -> Proxy a' a b' b m r
-liftMask maskFunction k = do
-        ioref <- liftIO (newIORef Unmasked)
-        let unmask
-                :: forall y . (Monad m)
-                => Proxy a' a b' b m y -> Proxy a' a b' b m y
-            unmask p = do
-                mRestore <- liftIO (readIORef ioref)
-                case mRestore of
-                    Unmasked       -> p
-                    Masked restore -> do
-                        r <- unsafeHoist restore p
-                        lift $ restore $ return ()
-                        return r
-            loop p = case p of
-                Request a' fa  -> Request a' (loop . fa )
-                Respond b  fb' -> Respond b  (loop . fb')
-                M m0           -> M $ maskFunction $ \restore -> do
-                    liftIO $ writeIORef ioref (Masked restore)
-                    let loop' m = do
-                            p' <- m
-                            case p' of
-                                M m' -> loop' m'
-                                _    -> return p'
-                    p' <- loop' m0
-                    liftIO $ writeIORef ioref  Unmasked
-                    return (loop p')
-                Pure r         -> Pure r
-        loop (k unmask)
+liftMask maskVariant k = do
+    ioref <- liftIO $ newIORef Unmasked
+
+    let -- mask adjacent actions in base monad
+        loop :: Proxy a' a b' b m r -> Proxy a' a b' b m r
+        loop (Request a' fa ) = Request a' (loop . fa )
+        loop (Respond b  fb') = Respond b  (loop . fb')
+        loop (M m)            = M $ maskVariant $ \unmaskVariant -> do
+            -- stash base's unmask and merge action
+            liftIO $ writeIORef ioref $ Masked unmaskVariant
+            m >>= chunk >>= return . loop
+        loop (Pure r)         = Pure r
+      
+        -- unmask adjacent actions in base monad
+        unmask :: forall q. Proxy a' a b' b m q -> Proxy a' a b' b m q
+        unmask (Request a' fa ) = Request a' (unmask . fa )
+        unmask (Respond b  fb') = Respond b  (unmask . fb')
+        unmask (M m)            = M $ do
+            -- retrieve base's unmask and apply to merged action
+            Masked unmaskVariant <- liftIO $ readIORef ioref
+            unmaskVariant (m >>= chunk >>= return . unmask)
+        unmask (Pure q)         = Pure q
+
+        -- merge adjacent actions in base monad
+        chunk :: forall s. Proxy a' a b' b m s -> m (Proxy a' a b' b m s)
+        chunk (M m) = m >>= chunk
+        chunk s     = return s
+
+    loop $ k unmask
 
 instance (MonadThrow m) => MonadThrow (Proxy a' a b' b m) where
     throwM = lift . throwM
