@@ -122,7 +122,7 @@ import qualified Control.Monad.Trans.Writer.Strict as W'
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Map as M
 import Data.Monoid (Monoid)
-import Pipes (Proxy, Effect, Effect', runEffect)
+import Pipes (Proxy, Effect, Effect', runEffect, ListT(..), Producer)
 import Pipes.Internal (unsafeHoist, Proxy(..))
 import Pipes.Lift (liftCatchError)
 
@@ -164,6 +164,36 @@ liftMask maskVariant k = do
 
     loop $ k unmask
 
+liftMask'
+  :: forall m a . (MonadIO m)
+  => (forall s . ((forall x . m x -> m x) -> m s) -> m s)
+  -> ((forall x . ListT m x -> ListT m x)  -> ListT m a) 
+  -> ListT m a
+liftMask' maskVariant k = Select $ do
+    ioref <- liftIO $ newIORef Unmasked
+
+    let loop :: Producer a m () -> Producer a m ()
+        loop (Request a' fa ) = Request a' (loop . fa )
+        loop (Respond b  fb') = Respond b  (loop . fb')
+        loop (M m)            = M $ maskVariant $ \unmaskVariant -> do
+            liftIO $ writeIORef ioref $ Masked unmaskVariant
+            m >>= chunk >>= return . loop
+        loop (Pure r)         = Pure r
+
+        unmask :: forall x . Producer x m () -> Producer x m ()
+        unmask (Request a' fa ) = Request a' (unmask . fa )
+        unmask (Respond b  fb') = Respond b  (unmask . fb')
+        unmask (M m)            = M $ do
+            Masked unmaskVariant <- liftIO $ readIORef ioref
+            unmaskVariant (m >>= chunk >>= return . unmask)
+        unmask (Pure q)         = Pure q
+
+        chunk :: forall x .  Producer x m () -> m (Producer x m ())
+        chunk (M m) = m >>= chunk
+        chunk s     = return s
+
+    loop (enumerate (k (Select . unmask . enumerate)))
+
 instance (MonadThrow m) => MonadThrow (Proxy a' a b' b m) where
     throwM = lift . throwM
 
@@ -173,6 +203,16 @@ instance (MonadCatch m) => MonadCatch (Proxy a' a b' b m) where
 instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
     mask                = liftMask mask
     uninterruptibleMask = liftMask uninterruptibleMask
+
+instance (MonadThrow m) => MonadThrow (ListT m) where
+    throwM = lift . throwM
+
+instance (MonadCatch m) => MonadCatch (ListT m) where
+    catch (Select p) f = Select (liftCatchError C.catch p (enumerate . f))
+
+instance (MonadMask m, MonadIO m) => MonadMask (ListT m) where
+    mask                = liftMask' mask
+    uninterruptibleMask = liftMask' uninterruptibleMask
 
 data Finalizers m = Finalizers
     { _nextKey    :: !Integer
@@ -300,6 +340,12 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
 
 instance (MonadSafe m) => MonadSafe (Proxy a' a b' b m) where
     type Base (Proxy a' a b' b m) = Base m
+    liftBase = lift . liftBase
+    register = lift . register
+    release  = lift . release
+
+instance (MonadSafe m) => MonadSafe (ListT m) where
+    type Base (ListT m) = Base m
     liftBase = lift . liftBase
     register = lift . register
     release  = lift . release
