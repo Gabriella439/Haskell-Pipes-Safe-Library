@@ -1,9 +1,10 @@
 Name: pipes-safe
-Version: 2.1.0
+Version: 2.2.1
 Cabal-Version: >=1.8.0.2
 Build-Type: Simple
 License: BSD3
 License-File: LICENSE
+Extra-Source-Files: README.md changelog.md
 Copyright: 2013, 2014 Gabriel Gonzalez
 Author: Gabriel Gonzalez
 Maintainer: Gabriel439@gmail.com
@@ -36,7 +37,7 @@ Library
     Build-Depends:
         base         >= 4       && < 5  ,
         containers   >= 0.3.0.0 && < 0.6,
-        exceptions   >= 0.6     && < 0.7,
+        exceptions   >= 0.6     && < 0.8,
         transformers >= 0.2.0.0 && < 0.5,
         pipes        >= 4.0.0   && < 4.2
     Exposed-Modules:

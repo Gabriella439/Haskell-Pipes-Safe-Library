@@ -123,7 +123,7 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Map as M
 import Data.Monoid (Monoid)
 import Pipes (Proxy, Effect, Effect', runEffect)
-import Pipes.Internal (unsafeHoist, Proxy(..))
+import Pipes.Internal (Proxy(..))
 import Pipes.Lift (liftCatchError)
 
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
@@ -146,7 +146,7 @@ liftMask maskVariant k = do
             liftIO $ writeIORef ioref $ Masked unmaskVariant
             m >>= chunk >>= return . loop
         loop (Pure r)         = Pure r
-      
+
         -- unmask adjacent actions in base monad
         unmask :: forall q. Proxy a' a b' b m q -> Proxy a' a b' b m q
         unmask (Request a' fa ) = Request a' (unmask . fa )
