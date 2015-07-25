@@ -85,7 +85,7 @@ module Pipes.Safe
     , module Control.Exception
     ) where
 
-import Control.Applicative (Applicative(pure, (<*>)), Alternative(empty, (<|>)))
+import Control.Applicative (Applicative, Alternative)
 import Control.Exception(Exception(..), SomeException(..))
 import qualified Control.Monad.Catch as C
 import Control.Monad.Catch
@@ -110,7 +110,7 @@ import Control.Monad.Catch
     , Exception(..)
     , SomeException
     )
-import Control.Monad (MonadPlus(mzero, mplus))
+import Control.Monad (MonadPlus)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.Trans.Class (MonadTrans(lift))
