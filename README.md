@@ -1,4 +1,4 @@
-# Pipes-Safe v2.2.0
+# Pipes-Safe v2.2.3
 
 `pipes-safe` builds upon
 [the `pipes` library](https://github.com/Gabriel439/Haskell-Pipes-Library) to
