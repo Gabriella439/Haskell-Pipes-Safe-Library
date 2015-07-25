@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes, TypeFamilies, FlexibleContexts, FlexibleInstances,
       MultiParamTypeClasses, UndecidableInstances, ScopedTypeVariables,
-      GeneralizedNewtypeDeriving, CPP, DeriveDataTypeable #-}
+      GeneralizedNewtypeDeriving, CPP #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 {-| This module provides an orphan 'MonadCatch' instance for 'Proxy' of the
@@ -131,7 +131,6 @@ import qualified Control.Monad.Writer.Class        as WC
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Map as M
 import Data.Monoid (Monoid)
-import Data.Typeable (Typeable)
 import Pipes (Proxy, Effect, Effect', runEffect)
 import Pipes.Internal (Proxy(..))
 import Pipes.Lift (liftCatchError)
@@ -196,7 +195,7 @@ data Finalizers m = Finalizers
     in the event of exceptions.
 -}
 newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Maybe (Finalizers m))) m r }
-    deriving (Typeable, Functor, Applicative, Alternative, Monad, MonadPlus,
+    deriving (Functor, Applicative, Alternative, Monad, MonadPlus,
               EC.MonadError e, SC.MonadState s, WC.MonadWriter w, CC.MonadCont,
               MonadThrow, MonadCatch, MonadMask, MonadIO, B.MonadBase b)
 
