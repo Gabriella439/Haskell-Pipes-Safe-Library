@@ -74,6 +74,8 @@ module Pipes.Safe
       -- * Utilities
       -- $utilities
     , onException
+    , tryP
+    , catchP
     , finally
     , bracket
     , bracket_
@@ -105,12 +107,11 @@ import Control.Monad.Catch
     , handleIOError
     , handleJust
     , handleIf
-    , try
     , tryJust
     , Exception(..)
     , SomeException
     )
-import Control.Monad (MonadPlus)
+import Control.Monad (MonadPlus, liftM)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -449,3 +450,29 @@ bracketOnError before after action = mask $ \restore -> do
 
     @Control.Exception@ re-exports 'Exception' and 'SomeException'.
 -}
+
+{- | Transform a 'Proxy' into one that catches any exceptions caused by its
+     effects, and returns the resulting exception.
+-}
+tryP :: (MonadSafe m, Exception e)
+     => Proxy a' a b' b m r -> Proxy a' a b' b m (Either e r)
+tryP p = case p of
+    Request  a' fa  -> Request a' (\a  -> tryP (fa  a))
+    Respond  b  fb' -> Respond b  (\b' -> tryP (fb' b'))
+    M        m      -> M $ C.try m >>= \eres -> return $ case eres of
+        Left  e -> Pure (Left e)
+        Right a -> tryP a
+    Pure     r      -> Pure (Right r)
+
+{- | Allows direct handling of exceptions raised by the effects in a 'Proxy'.
+-}
+catchP :: (MonadSafe m, Exception e)
+       => Proxy a' a b' b m r -> (e -> Proxy a' a b' b m r)
+       -> Proxy a' a b' b m r
+catchP p0 f = go p0
+  where
+    go p = case p of
+        Request  a' fa  -> Request a' (\a  -> go (fa  a))
+        Respond  b  fb' -> Respond b  (\b' -> go (fb' b'))
+        M        m      -> M $ C.catch (liftM go m) (return . f)
+        Pure     r      -> Pure r
