@@ -1,6 +1,6 @@
 -- | Simple resource management functions
 
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes, Safe #-}
 
 module Pipes.Safe.Prelude (
     -- * Handle management

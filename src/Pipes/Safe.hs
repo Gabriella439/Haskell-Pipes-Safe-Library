@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes, TypeFamilies, FlexibleContexts, FlexibleInstances,
       MultiParamTypeClasses, UndecidableInstances, ScopedTypeVariables,
-      GeneralizedNewtypeDeriving, CPP #-}
+      GeneralizedNewtypeDeriving, CPP, Trustworthy #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 {-| This module provides an orphan 'MonadCatch' instance for 'Proxy' of the
