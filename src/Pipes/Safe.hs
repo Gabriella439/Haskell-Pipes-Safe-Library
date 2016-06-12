@@ -128,7 +128,11 @@ import qualified Control.Monad.State.Class         as SC
 import qualified Control.Monad.Trans.Writer.Lazy   as W
 import qualified Control.Monad.Trans.Writer.Strict as W'
 import qualified Control.Monad.Writer.Class        as WC
+#if MIN_VERSION_base(4,6,0)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
+#else
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef)
+#endif
 import qualified Data.Map as M
 import Data.Monoid (Monoid)
 import Pipes (Proxy, Effect, Effect', runEffect)
@@ -224,7 +228,11 @@ runSafeT :: (MonadMask m, MonadIO m) => SafeT m r -> m r
 runSafeT m = C.bracket
     (liftIO $ newIORef $! Just $! Finalizers 0 M.empty)
     (\ioref -> do
+#if MIN_VERSION_base(4,6,0)
         mres <- liftIO $ atomicModifyIORef' ioref $ \val ->
+#else
+        mres <- liftIO $ atomicModifyIORef ioref $ \val ->
+#endif
             (Nothing, val)
         case mres of
             Nothing -> error "runSafeT's resources were freed by another"
@@ -278,7 +286,11 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
     register io = do
         ioref <- SafeT R.ask
         liftIO $ do
+#if MIN_VERSION_base(4,6,0)
             n <- atomicModifyIORef' ioref $ \val ->
+#else
+            n <- atomicModifyIORef ioref $ \val ->
+#endif
                 case val of
                     Nothing -> error "register: SafeT block is closed"
                     Just (Finalizers n fs) ->
@@ -287,7 +299,11 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
 
     release key = do
         ioref <- SafeT R.ask
+#if MIN_VERSION_base(4,6,0)
         liftIO $ atomicModifyIORef' ioref $ \val ->
+#else
+        liftIO $ atomicModifyIORef ioref $ \val ->
+#endif
             case val of
                 Nothing -> error "release: SafeT block is closed"
                 Just (Finalizers n fs) ->
