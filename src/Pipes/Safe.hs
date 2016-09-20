@@ -179,12 +179,6 @@ liftMask maskVariant k = do
 
     loop $ k unmask
 
-instance (MonadThrow m) => MonadThrow (Proxy a' a b' b m) where
-    throwM = lift . throwM
-
-instance (MonadCatch m) => MonadCatch (Proxy a' a b' b m) where
-    catch = liftCatchError C.catch
-
 instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
     mask                = liftMask mask
     uninterruptibleMask = liftMask uninterruptibleMask
