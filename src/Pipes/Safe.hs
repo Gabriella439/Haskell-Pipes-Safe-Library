@@ -111,6 +111,7 @@ import Control.Monad.Catch
     , SomeException
     )
 import Control.Monad (MonadPlus)
+import Control.Monad.Fix (MonadFix)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.Trans.Class (MonadTrans(lift))
@@ -199,7 +200,7 @@ data Finalizers m = Finalizers
     in the event of exceptions.
 -}
 newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Maybe (Finalizers m))) m r }
-    deriving (Functor, Applicative, Alternative, Monad, MonadPlus,
+    deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadFix,
               EC.MonadError e, SC.MonadState s, WC.MonadWriter w, CC.MonadCont,
               MonadThrow, MonadCatch, MonadMask, MonadIO, B.MonadBase b)
 
