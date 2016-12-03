@@ -43,7 +43,7 @@ Library
         transformers      >= 0.2.0.0 && < 0.6,
         transformers-base >= 0.4.4   && < 0.5,
         monad-control     >= 1.0.0.4 && < 1.1,
-        pipes             >= 4.0.0   && < 4.3
+        pipes             >= 4.3.0   && < 4.4
     Exposed-Modules:
         Pipes.Safe,
         Pipes.Safe.Prelude
