@@ -121,6 +121,7 @@ import qualified Control.Monad.Catch.Pure          as E
 import qualified Control.Monad.Trans.Identity      as I
 import qualified Control.Monad.Cont.Class          as CC
 import qualified Control.Monad.Error.Class         as EC
+import qualified Control.Monad.Primitive           as Prim
 import qualified Control.Monad.Trans.Reader        as R
 import qualified Control.Monad.Trans.RWS.Lazy      as RWS
 import qualified Control.Monad.Trans.RWS.Strict    as RWS'
@@ -216,6 +217,11 @@ instance MonadBaseControl b m => MonadBaseControl b (SafeT m) where
              f $ liftM StMT . runInBase . \(SafeT r) -> R.runReaderT r reader'
      restoreM (StMT base) = SafeT $ R.ReaderT $ const $ restoreM base
 #endif
+
+instance Prim.PrimMonad m => Prim.PrimMonad (SafeT m) where
+  type PrimState (SafeT m) = Prim.PrimState m
+  primitive = lift . Prim.primitive
+  {-# INLINE primitive #-}
 
 {-| Run the 'SafeT' monad transformer, executing all unreleased finalizers at
     the end of the computation
