@@ -140,7 +140,6 @@ import qualified Data.Map as M
 import Data.Monoid (Monoid)
 import Pipes (Proxy, Effect, Effect', runEffect)
 import Pipes.Internal (Proxy(..))
-import Pipes.Lift (liftCatchError)
 
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
@@ -181,8 +180,19 @@ liftMask maskVariant k = do
     loop $ k unmask
 
 instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
-    mask                = liftMask mask
+    mask = liftMask mask
+
     uninterruptibleMask = liftMask uninterruptibleMask
+
+#if MIN_VERSION_exceptions(0,9,0)
+    generalBracket acquire release_ clean use = mask $ \unmasked -> do
+      resource <- acquire
+      result <- unmasked (use resource) `catch` (\e -> do
+        _ <- clean resource e
+        throwM e )
+      _ <- release_ resource
+      return result
+#endif
 
 data Finalizers m = Finalizers
     { _nextKey    :: !Integer
