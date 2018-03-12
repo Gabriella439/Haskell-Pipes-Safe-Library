@@ -94,6 +94,7 @@ import Control.Monad.Catch
     ( MonadCatch(..)
     , MonadThrow(..)
     , MonadMask(..)
+    , ExitCase(..)
     , mask_
     , uninterruptibleMask_
     , catchAll
@@ -184,15 +185,22 @@ instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
 
     uninterruptibleMask = liftMask uninterruptibleMask
 
-#if MIN_VERSION_exceptions(0,9,0)
-    generalBracket acquire release_ clean use = mask $ \unmasked -> do
-      resource <- acquire
-      result <- unmasked (use resource) `catch` (\e -> do
-        _ <- clean resource e
-        throwM e )
-      _ <- release_ resource
-      return result
+#if MIN_VERSION_exceptions(0,10,0)
+    generalBracket acquire release_ use = mask $ \unmasked -> do
+      a <- acquire
+      let action = do
+              b <- use a
+              return (ExitCaseSuccess b, ExitCaseSuccess_ b)
+      let handler e = return (ExitCaseException e, ExitCaseException_ e)
+      (exitCase, exitCase_) <- unmasked action `catch` handler
+      c <- release_ a exitCase
+      case exitCase_ of
+          ExitCaseException_ e -> throwM e
+          ExitCaseSuccess_ b   -> return (b, c)
 #endif
+
+-- | This is to avoid an unnecessary partial pattern match in `generalBracket`
+data ExitCase_ a = ExitCaseSuccess_ a | ExitCaseException_ SomeException
 
 data Finalizers m = Finalizers
     { _nextKey    :: !Integer
