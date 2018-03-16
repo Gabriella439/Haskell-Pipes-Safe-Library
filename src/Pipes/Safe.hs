@@ -94,7 +94,9 @@ import Control.Monad.Catch
     ( MonadCatch(..)
     , MonadThrow(..)
     , MonadMask(..)
+#if MIN_VERSION_exceptions(0,10,0)
     , ExitCase(..)
+#endif
     , mask_
     , uninterruptibleMask_
     , catchAll
@@ -197,10 +199,10 @@ instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
       case exitCase_ of
           ExitCaseException_ e -> throwM e
           ExitCaseSuccess_ b   -> return (b, c)
-#endif
 
 -- | This is to avoid an unnecessary partial pattern match in `generalBracket`
 data ExitCase_ a = ExitCaseSuccess_ a | ExitCaseException_ SomeException
+#endif
 
 data Finalizers m = Finalizers
     { _nextKey    :: !Integer
