@@ -37,7 +37,7 @@ Source-Repository head
 Library
     Build-Depends:
         base              >= 4.8     && < 5   ,
-        containers        >= 0.3.0.0 && < 0.6 ,
+        containers        >= 0.3.0.0 && < 0.7 ,
         exceptions        >= 0.6     && < 0.11,
         mtl               >= 2.1     && < 2.3 ,
         transformers      >= 0.2.0.0 && < 0.6 ,
