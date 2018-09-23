@@ -45,6 +45,9 @@ Library
         monad-control     >= 1.0.0.4 && < 1.1 ,
         primitive         >= 0.6.2.0 && < 0.7 ,
         pipes             >= 4.3.0   && < 4.4
+    if impl(ghc < 8.0)
+        Build-Depends:
+            fail                        < 4.10
     Exposed-Modules:
         Pipes.Safe,
         Pipes.Safe.Prelude
