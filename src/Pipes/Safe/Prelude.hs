@@ -12,6 +12,7 @@ module Pipes.Safe.Prelude (
     writeFile
     ) where
 
+import Control.Monad.Fail (MonadFail)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Pipes (Producer', Consumer')
 import Pipes.Safe (bracket, MonadSafe)
@@ -34,13 +35,13 @@ withFile file ioMode = bracket (liftIO $ IO.openFile file ioMode) (liftIO . IO.h
 {-| Read lines from a file, automatically opening and closing the file as
     necessary
 -}
-readFile :: (MonadSafe m) => FilePath -> Producer' String m ()
+readFile :: (MonadSafe m, MonadFail m) => FilePath -> Producer' String m ()
 readFile file = withFile file IO.ReadMode P.fromHandle
 {-# INLINABLE readFile #-}
 
 {-| Write lines to a file, automatically opening and closing the file as
     necessary
 -}
-writeFile :: (MonadSafe m) => FilePath -> Consumer' String m r
+writeFile :: (MonadSafe m, MonadFail m) => FilePath -> Consumer' String m r
 writeFile file = withFile file IO.WriteMode P.toHandle
 {-# INLINABLE writeFile #-}
