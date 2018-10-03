@@ -3,7 +3,7 @@
 }:
 mkDerivation {
   pname = "pipes-safe";
-  version = "2.3.0";
+  version = "2.3.1";
   src = ./.;
   libraryHaskellDepends = [
     base containers exceptions monad-control mtl pipes primitive
