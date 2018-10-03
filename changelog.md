@@ -1,3 +1,8 @@
+# Version 2.3.1
+
+* Remove `MonadFail` constraints introduced in version 2.3.0
+* Implement `MonadFail` for `SafeT`
+
 # Version 2.3.0
 
 * BREAKING CHANGE: Support GHC 8.6.1
