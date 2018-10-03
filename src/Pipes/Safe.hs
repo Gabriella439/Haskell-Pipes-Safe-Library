@@ -148,7 +148,7 @@ import Pipes.Internal (Proxy(..))
 data Restore m = Unmasked | Masked (forall x . m x -> m x)
 
 liftMask
-    :: forall m a' a b' b r . (MonadIO m, MonadCatch m, MonadFail m)
+    :: forall m a' a b' b r . (MonadIO m, MonadCatch m)
     => (forall s . ((forall x . m x -> m x) -> m s) -> m s)
     -> ((forall x . Proxy a' a b' b m x -> Proxy a' a b' b m x)
         -> Proxy a' a b' b m r)
@@ -172,7 +172,9 @@ liftMask maskVariant k = do
         unmask (Respond b  fb') = Respond b  (unmask . fb')
         unmask (M m)            = M $ do
             -- retrieve base's unmask and apply to merged action
-            Masked unmaskVariant <- liftIO $ readIORef ioref
+            unmaskVariant <- liftIO $ do
+                Masked unmaskVariant <- readIORef ioref
+                return unmaskVariant
             unmaskVariant (m >>= chunk >>= return . unmask)
         unmask (Pure q)         = Pure q
 
@@ -183,7 +185,7 @@ liftMask maskVariant k = do
 
     loop $ k unmask
 
-instance (MonadMask m, MonadIO m, MonadFail m) => MonadMask (Proxy a' a b' b m) where
+instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
     mask = liftMask mask
 
     uninterruptibleMask = liftMask uninterruptibleMask
@@ -351,7 +353,7 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
                 Just (Finalizers n fs) ->
                     (Just $! Finalizers n (M.delete (unlock key) fs), ())
 
-instance (MonadSafe m, MonadFail m) => MonadSafe (Proxy a' a b' b m) where
+instance MonadSafe m => MonadSafe (Proxy a' a b' b m) where
     type Base (Proxy a' a b' b m) = Base m
     liftBase = lift . liftBase
     register = lift . register
