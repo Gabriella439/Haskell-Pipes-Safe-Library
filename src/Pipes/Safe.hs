@@ -217,9 +217,24 @@ data Finalizers m = Finalizers
     in the event of exceptions.
 -}
 newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Maybe (Finalizers m))) m r }
-    deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadFix,
-              EC.MonadError e, SC.MonadState s, WC.MonadWriter w, CC.MonadCont,
-              MonadThrow, MonadCatch, MonadMask, MonadIO, B.MonadBase b)
+    deriving
+    ( Functor
+    , Applicative
+    , Alternative
+    , Monad
+    , MonadFail
+    , MonadPlus
+    , MonadFix
+    , EC.MonadError e
+    , SC.MonadState s
+    , WC.MonadWriter w
+    , CC.MonadCont
+    , MonadThrow
+    , MonadCatch
+    , MonadMask
+    , MonadIO
+    , B.MonadBase b
+    )
 
 instance MonadTrans SafeT where
     lift m = SafeT (lift m)
