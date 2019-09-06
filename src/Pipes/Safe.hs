@@ -3,13 +3,12 @@
       GeneralizedNewtypeDeriving, CPP, Trustworthy #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-{-| This module provides an orphan 'MonadCatch' instance for 'Proxy' of the
+{-| This module provides an orphan 'MonadMask' instance for 'Proxy' of the
     form:
 
-> instance (MonadCatch m, MonadIO m) => MonadCatch (Proxy a' a b' b m) where
+> instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
 
-    ... so you can throw and catch exceptions within pipes using all
-    'MonadCatch' operations.
+    Which is needed to implement the instance for MonadSafe for Proxy.
 
     This module also provides generalized versions of some 'MonadCatch'
     operations so that you can also protect against premature termination of
