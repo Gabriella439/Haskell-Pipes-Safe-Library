@@ -1,6 +1,6 @@
 Name: pipes-safe
-Version: 2.3.2
-Cabal-Version: >=1.8.0.2
+Version: 2.3.3
+Cabal-Version: >=1.10
 Build-Type: Simple
 License: BSD3
 License-File: LICENSE
@@ -53,3 +53,4 @@ Library
         Pipes.Safe.Prelude
     HS-Source-Dirs: src
     GHC-Options: -O2 -Wall
+    Default-Language: Haskell2010
