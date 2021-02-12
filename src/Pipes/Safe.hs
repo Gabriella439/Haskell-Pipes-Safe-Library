@@ -290,7 +290,7 @@ runSafeT m = C.bracket
     finalization without exiting the 'Proxy' monad.
 -}
 runSafeP :: (MonadMask m, MonadIO m) => Effect (SafeT m) r -> Effect' m r
-runSafeP = lift . runSafeT . runEffect
+runSafeP e = lift . runSafeT . runEffect $ e
 {-# INLINABLE runSafeP #-}
 
 -- | Token used to 'release' a previously 'register'ed finalizer

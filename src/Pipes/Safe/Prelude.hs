@@ -42,5 +42,5 @@ readFile file = withFile file IO.ReadMode P.fromHandle
     necessary
 -}
 writeFile :: MonadSafe m => FilePath -> Consumer' String m r
-writeFile file = withFile file IO.WriteMode P.toHandle
+writeFile file = withFile file IO.WriteMode $ \h -> P.toHandle h
 {-# INLINABLE writeFile #-}
