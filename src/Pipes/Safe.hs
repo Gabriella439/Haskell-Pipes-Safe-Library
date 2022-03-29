@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes, TypeFamilies, FlexibleContexts, FlexibleInstances,
       MultiParamTypeClasses, UndecidableInstances, ScopedTypeVariables,
-      GeneralizedNewtypeDeriving, CPP, Trustworthy #-}
+      GeneralizedNewtypeDeriving, Trustworthy #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 {-| This module provides an orphan 'MonadMask' instance for 'Proxy' of the
@@ -86,16 +86,14 @@ module Pipes.Safe
     , module Control.Exception
     ) where
 
-import Control.Applicative (Applicative, Alternative)
+import Control.Applicative (Alternative)
 import Control.Exception(Exception(..), SomeException(..))
 import qualified Control.Monad.Catch as C
 import Control.Monad.Catch
     ( MonadCatch(..)
     , MonadThrow(..)
     , MonadMask(..)
-#if MIN_VERSION_exceptions(0,10,0)
     , ExitCase(..)
-#endif
     , mask_
     , uninterruptibleMask_
     , catchAll
@@ -114,7 +112,6 @@ import Control.Monad.Catch
     , SomeException
     )
 import Control.Monad (MonadPlus, liftM)
-import Control.Monad.Fail (MonadFail)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -134,13 +131,9 @@ import qualified Control.Monad.State.Class         as SC
 import qualified Control.Monad.Trans.Writer.Lazy   as W
 import qualified Control.Monad.Trans.Writer.Strict as W'
 import qualified Control.Monad.Writer.Class        as WC
-#if MIN_VERSION_base(4,6,0)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
-#else
-import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef)
-#endif
+import Data.Kind (Type)
 import qualified Data.Map as M
-import Data.Monoid (Monoid)
 import Pipes (Proxy, Effect, Effect', runEffect)
 import Pipes.Internal (Proxy(..))
 
@@ -189,7 +182,6 @@ instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
 
     uninterruptibleMask = liftMask uninterruptibleMask
 
-#if MIN_VERSION_exceptions(0,10,0)
     generalBracket acquire release_ use = mask $ \unmasked -> do
       a <- acquire
       let action = do
@@ -204,7 +196,6 @@ instance (MonadMask m, MonadIO m) => MonadMask (Proxy a' a b' b m) where
 
 -- | This is to avoid an unnecessary partial pattern match in `generalBracket`
 data ExitCase_ a = ExitCaseSuccess_ a | ExitCaseException_ SomeException
-#endif
 
 data Finalizers m = Finalizers
     { _nextKey    :: !Integer
@@ -225,9 +216,7 @@ newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Maybe (Finalizers m))) 
     , Monad
 -- The derived instance for `MonadFail` requires a `MonadFail` instance for
 -- `ReaderT` which is first available in `transformers-0.5.0.0`
-#if MIN_VERSION_transformers(0,5,0)
     , MonadFail
-#endif
     , MonadPlus
     , MonadFix
     , EC.MonadError e
@@ -245,19 +234,11 @@ instance MonadTrans SafeT where
     lift m = SafeT (lift m)
 
 instance MonadBaseControl b m => MonadBaseControl b (SafeT m) where
-#if MIN_VERSION_monad_control(1,0,0)
      type StM (SafeT m) a = StM m a
      liftBaseWith f = SafeT $ R.ReaderT $ \reader' ->
          liftBaseWith $ \runInBase ->
              f $ runInBase . (\(SafeT r) -> R.runReaderT r reader'  )
      restoreM = SafeT . R.ReaderT . const . restoreM
-#else
-     newtype StM (SafeT m) a = StMT (StM m a)
-     liftBaseWith f = SafeT $ R.ReaderT $ \reader' ->
-         liftBaseWith $ \runInBase ->
-             f $ liftM StMT . runInBase . \(SafeT r) -> R.runReaderT r reader'
-     restoreM (StMT base) = SafeT $ R.ReaderT $ const $ restoreM base
-#endif
 
 instance Prim.PrimMonad m => Prim.PrimMonad (SafeT m) where
   type PrimState (SafeT m) = Prim.PrimState m
@@ -271,11 +252,7 @@ runSafeT :: (MonadMask m, MonadIO m) => SafeT m r -> m r
 runSafeT m = C.bracket
     (liftIO $ newIORef $! Just $! Finalizers 0 M.empty)
     (\ioref -> do
-#if MIN_VERSION_base(4,6,0)
         mres <- liftIO $ atomicModifyIORef' ioref $ \val ->
-#else
-        mres <- liftIO $ atomicModifyIORef ioref $ \val ->
-#endif
             (Nothing, val)
         case mres of
             Nothing -> error "runSafeT's resources were freed by another"
@@ -303,7 +280,7 @@ class (MonadCatch m, MonadMask m, MonadIO m, MonadIO (Base m)) => MonadSafe m wh
     {-| The monad used to run resource management actions, corresponding to the
         monad directly beneath 'SafeT'
     -}
-    type Base (m :: * -> *) :: * -> *
+    type Base (m :: Type -> Type) :: Type -> Type
 
     -- | Lift an action from the 'Base' monad
     liftBase :: Base m r -> m r
@@ -329,11 +306,7 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
     register io = do
         ioref <- SafeT R.ask
         liftIO $ do
-#if MIN_VERSION_base(4,6,0)
             n <- atomicModifyIORef' ioref $ \val ->
-#else
-            n <- atomicModifyIORef ioref $ \val ->
-#endif
                 case val of
                     Nothing -> error "register: SafeT block is closed"
                     Just (Finalizers n fs) ->
@@ -342,11 +315,7 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
 
     release key = do
         ioref <- SafeT R.ask
-#if MIN_VERSION_base(4,6,0)
         liftIO $ atomicModifyIORef' ioref $ \val ->
-#else
-        liftIO $ atomicModifyIORef ioref $ \val ->
-#endif
             case val of
                 Nothing -> error "release: SafeT block is closed"
                 Just (Finalizers n fs) ->
