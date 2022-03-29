@@ -8,7 +8,7 @@ Extra-Source-Files: README.md changelog.md
 Copyright: 2013, 2014 Gabriel Gonzalez
 Author: Gabriel Gonzalez
 Maintainer: Gabriel439@gmail.com
-Tested-With: GHC == 7.10.3, GHC == 8.0.2, GHC == 8.2.2, GHC == 8.4.3
+Tested-With: GHC == 8.10.7, GHC == 9.0.2, GHC == 9.2.1
 Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
 Synopsis: Safety for the pipes ecosystem
 Description:
@@ -36,18 +36,15 @@ Source-Repository head
 
 Library
     Build-Depends:
-        base              >= 4.8     && < 5   ,
-        containers        >= 0.3.0.0 && < 0.7 ,
-        exceptions        >= 0.6     && < 0.11,
-        mtl               >= 2.1     && < 2.3 ,
-        transformers      >= 0.2.0.0 && < 0.6 ,
+        base              >= 4.14    && < 4.17,
+        containers        >= 0.6.2.1 && < 0.7 ,
+        exceptions        >= 0.10.4  && < 0.11,
+        mtl               >= 2.2.2   && < 2.3 ,
+        transformers      >= 0.5.6.2 && < 0.6 ,
         transformers-base >= 0.4.4   && < 0.5 ,
         monad-control     >= 1.0.0.4 && < 1.1 ,
-        primitive         >= 0.6.2.0 && < 0.8 ,
-        pipes             >= 4.3.0   && < 4.4
-    if impl(ghc < 8.0)
-        Build-Depends:
-            fail                        < 4.10
+        primitive         >= 0.7.0.0 && < 0.8 ,
+        pipes             >= 4.3.5   && < 4.4
     Exposed-Modules:
         Pipes.Safe,
         Pipes.Safe.Prelude
