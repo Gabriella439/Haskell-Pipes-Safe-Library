@@ -1,0 +1,12 @@
+packages: ./pipes-safe.cabal
+
+constraints:
+    base == 4.14.*
+  , containers == 0.6.2.1
+  , exceptions == 0.10.4
+  , mtl == 2.2.2
+  , transformers == 0.5.6.2
+  , transformers-base == 0.4.4
+  , monad-control == 1.0.0.4
+  , primitive == 0.7.0.0
+  , pipes == 4.3.10
