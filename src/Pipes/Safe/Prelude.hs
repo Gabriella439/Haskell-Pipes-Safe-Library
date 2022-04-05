@@ -5,7 +5,9 @@
 module Pipes.Safe.Prelude (
     -- * Handle management
     withFile,
+    withBinaryFile,
     openFile,
+    openBinaryFile,
 
     -- * String I/O
     -- $strings
@@ -25,20 +27,41 @@ import qualified Pipes.Prelude as P
 import qualified System.IO as IO
 import Prelude hiding (readFile, writeFile)
 
--- | Acquire a 'IO.Handle' within 'MonadSafe'
-withFile :: (MonadSafe m) => FilePath -> IO.IOMode -> (IO.Handle -> m r) -> m r
+{- | Acquire a 'IO.Handle' within 'MonadSafe'
+
+     The file is opened in text mode. See also: 'withBinaryFile'
+-}
+withFile :: MonadSafe m => FilePath -> IO.IOMode -> (IO.Handle -> m r) -> m r
 withFile file ioMode = bracket (liftIO $ IO.openFile file ioMode) (liftIO . IO.hClose)
 {-# INLINABLE withFile #-}
+
+{- | Like 'withFile', but open the file in binary mode
+
+     See 'System.IO.hSetBinaryMode' for the differences between binary and text mode.
+-}
+withBinaryFile :: MonadSafe m => FilePath -> IO.IOMode -> (IO.Handle -> m r) -> m r
+withBinaryFile file ioMode = bracket (liftIO $ IO.openBinaryFile file ioMode) (liftIO . IO.hClose)
+{-# INLINABLE withBinaryFile #-}
 
 {- | Acquire a 'IO.Handle' within 'MonadSafe'
 
      The 'ReleaseKey' can be used to close the handle with 'Pipes.Safe.release';
      otherwise the handle will be closed automatically at the conclusion of the
      'MonadSafe' block.
+
+     The file is opened in text mode. See also: 'openBinaryFile'
 -}
 openFile :: MonadSafe m => FilePath -> IO.IOMode -> m (ReleaseKey, IO.Handle)
 openFile file ioMode = allocate (liftIO $ IO.openFile file ioMode) (liftIO . IO.hClose)
 {-# INLINABLE openFile #-}
+
+{- | Like 'openFile', but open the file in binary mode
+
+     See 'System.IO.hSetBinaryMode' for the differences between binary and text mode.
+-}
+openBinaryFile :: MonadSafe m => FilePath -> IO.IOMode -> m (ReleaseKey, IO.Handle)
+openBinaryFile file ioMode = allocate (liftIO $ IO.openBinaryFile file ioMode) (liftIO . IO.hClose)
+{-# INLINABLE openBinaryFile #-}
 
 {- $strings
     Note that 'String's are very inefficient, and I will release future separate
