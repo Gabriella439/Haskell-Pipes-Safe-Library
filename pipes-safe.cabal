@@ -5,11 +5,11 @@ Build-Type: Simple
 License: BSD3
 License-File: LICENSE
 Extra-Source-Files: README.md changelog.md
-Copyright: 2013, 2014 Gabriel Gonzalez
-Author: Gabriel Gonzalez
-Maintainer: Gabriel439@gmail.com
+Copyright: 2013, 2014 Gabriella Gonzalez
+Author: Gabriella Gonzalez
+Maintainer: GenuineGabriella@gmail.com
 Tested-With: GHC == 8.10.7, GHC == 9.0.2, GHC == 9.2.1
-Bug-Reports: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library/issues
+Bug-Reports: https://github.com/Gabriella439/Haskell-Pipes-Safe-Library/issues
 Synopsis: Safety for the pipes ecosystem
 Description:
     This package adds resource management and exception handling to the @pipes@
@@ -32,7 +32,7 @@ Description:
 Category: Control, Pipes, Error Handling
 Source-Repository head
     Type: git
-    Location: https://github.com/Gabriel439/Haskell-Pipes-Safe-Library
+    Location: https://github.com/Gabriella439/Haskell-Pipes-Safe-Library
 
 Library
     Build-Depends:
