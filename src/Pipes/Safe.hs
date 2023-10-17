@@ -62,7 +62,7 @@ import Pipes.Safe
 
 module Pipes.Safe
     ( -- * SafeT
-      SafeT
+      SafeT(SafeT)
     , runSafeT
     , runSafeP
 
@@ -79,6 +79,9 @@ module Pipes.Safe
     , bracket
     , bracket_
     , bracketOnError
+
+    -- * Internals
+    , Env
 
     -- * Re-exports
     -- $reexports
@@ -202,13 +205,28 @@ data Finalizers m = Finalizers
     , _finalizers :: !(M.Map Integer (m ()))
     }
 
+-- | Internal 'SafeT' read-write environment. Exported only so that it can be
+-- passed around unmodified by users of the v'SafeT' constructor.
+--
+-- Warning: Using the 'Env' outside the corresponding 'SafeT' scope will
+-- result in undefined behavior.
+newtype Env m = Env (IORef (Maybe (Finalizers m)))
+
 {-| 'SafeT' is a monad transformer that extends the base monad with the ability
     to 'register' and 'release' finalizers.
 
     All unreleased finalizers are called at the end of the 'SafeT' block, even
     in the event of exceptions.
 -}
-newtype SafeT m r = SafeT { unSafeT :: R.ReaderT (IORef (Maybe (Finalizers m))) m r }
+newtype SafeT m r
+    = -- | Constructor exported in case it's necessary for integrating 'SafeT'
+      -- with other libraries. For example, implementing @mtl@-like
+      -- Monad/Something/ instances will often require access to the 'SafeT'
+      -- constructor.
+      --
+      -- Warning: Using the 'Env' outside the corresponding 'SafeT' scope will
+      -- result in undefined behavior.
+      SafeT (R.ReaderT (Env m) m r)
     deriving
     ( Functor
     , Applicative
@@ -249,7 +267,7 @@ instance Prim.PrimMonad m => Prim.PrimMonad (SafeT m) where
     the end of the computation
 -}
 runSafeT :: (MonadMask m, MonadIO m) => SafeT m r -> m r
-runSafeT m = C.bracket
+runSafeT (SafeT m) = C.bracket
     (liftIO $ newIORef $! Just $! Finalizers 0 M.empty)
     (\ioref -> do
         mres <- liftIO $ atomicModifyIORef' ioref $ \val ->
@@ -257,7 +275,7 @@ runSafeT m = C.bracket
         case mres of
             Nothing -> error "runSafeT's resources were freed by another"
             Just (Finalizers _ fs) -> mapM snd (M.toDescList fs) )
-    (R.runReaderT (unSafeT m))
+    (R.runReaderT m . Env)
 {-# INLINABLE runSafeT #-}
 
 {-| Run 'SafeT' in the base monad, executing all unreleased finalizers at the
@@ -304,7 +322,7 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
     liftBase = lift
 
     register io = do
-        ioref <- SafeT R.ask
+        Env ioref <- SafeT R.ask
         liftIO $ do
             n <- atomicModifyIORef' ioref $ \val ->
                 case val of
@@ -314,7 +332,7 @@ instance (MonadIO m, MonadCatch m, MonadMask m) => MonadSafe (SafeT m) where
             return (ReleaseKey n)
 
     release key = do
-        ioref <- SafeT R.ask
+        Env ioref <- SafeT R.ask
         liftIO $ atomicModifyIORef' ioref $ \val ->
             case val of
                 Nothing -> error "release: SafeT block is closed"
