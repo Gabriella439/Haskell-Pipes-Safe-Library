@@ -1,6 +1,7 @@
 # Version
 
 * Export `SafeT` constructor
+* Export `MonadReader` instance for `SafeT`
 
 # Version 2.3.1
 
