@@ -1,3 +1,7 @@
+# Version
+
+* Export `SafeT` constructor
+
 # Version 2.3.1
 
 * Remove `MonadFail` constraints introduced in version 2.3.0
