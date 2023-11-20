@@ -125,6 +125,7 @@ import qualified Control.Monad.Trans.Identity      as I
 import qualified Control.Monad.Cont.Class          as CC
 import qualified Control.Monad.Error.Class         as EC
 import qualified Control.Monad.Primitive           as Prim
+import qualified Control.Monad.Reader.Class        as SR
 import qualified Control.Monad.Trans.Reader        as R
 import qualified Control.Monad.Trans.RWS.Lazy      as RWS
 import qualified Control.Monad.Trans.RWS.Strict    as RWS'
@@ -262,6 +263,10 @@ instance Prim.PrimMonad m => Prim.PrimMonad (SafeT m) where
   type PrimState (SafeT m) = Prim.PrimState m
   primitive = lift . Prim.primitive
   {-# INLINE primitive #-}
+
+instance SR.MonadReader e m => SR.MonadReader e (SafeT m) where
+  ask = lift SR.ask
+  local f (SafeT (R.ReaderT g)) = SafeT (R.ReaderT (\e -> SR.local f (g e)))
 
 {-| Run the 'SafeT' monad transformer, executing all unreleased finalizers at
     the end of the computation
