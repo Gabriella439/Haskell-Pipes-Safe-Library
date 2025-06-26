@@ -8,7 +8,7 @@ Extra-Source-Files: README.md changelog.md
 Copyright: 2013, 2014 Gabriella Gonzalez
 Author: Gabriella Gonzalez
 Maintainer: GenuineGabriella@gmail.com
-Tested-With: GHC == 8.10.7, GHC == 9.0.2, GHC == 9.2.1
+Tested-With: GHC == 8.10.7, GHC == 9.2.7, GHC == 9.6.6, GHC == 9.8.4, GHC == 9.10.1, GHC == 9.12.1
 Bug-Reports: https://github.com/Gabriella439/Haskell-Pipes-Safe-Library/issues
 Synopsis: Safety for the pipes ecosystem
 Description:
@@ -36,8 +36,8 @@ Source-Repository head
 
 Library
     Build-Depends:
-        base              >= 4.14    && < 4.21,
-        containers        >= 0.6.2.1 && < 0.8 ,
+        base              >= 4.14    && < 4.22,
+        containers        >= 0.6.2.1 && < 0.9 ,
         exceptions        >= 0.10.4  && < 0.11,
         mtl               >= 2.2.2   && < 2.4 ,
         transformers      >= 0.5.6.2 && < 0.7 ,
